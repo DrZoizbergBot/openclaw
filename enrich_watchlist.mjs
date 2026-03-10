@@ -189,6 +189,7 @@ for (const block of blocks) {
   enriched.push({
     ticker,
     sentimentScore: sentiment?.sentimentScore ?? 0.5,
+    sentimentLabel: sentiment?.sentimentLabel ?? "NEUTRAL",
     lines: newLines,
   });
 }
