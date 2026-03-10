@@ -165,7 +165,7 @@ function compositeScore(reddit, stocktwits) {
 }
 
 function scoreToLabel(score) {
-  if (score >= 0.62) return "BULLISH";
+  if (score >= 0.58) return "BULLISH";
   if (score <= 0.42) return "BEARISH";
   return "NEUTRAL";
 }
