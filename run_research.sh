@@ -119,7 +119,7 @@ for TICKER in $TICKERS; do
 
   # Fetch quote
   QUOTE=$(fetch_quote "$TICKER")
-  PRICE=$(echo "$QUOTE" | cut -d',' -f6 2>/dev/null || echo "")
+  PRICE=$(echo "$QUOTE" | cut -d',' -f7 2>/dev/null || echo "")
 
   # Validate price
   if [ -z "$PRICE" ] || [ "$PRICE" = "N/D" ]; then
