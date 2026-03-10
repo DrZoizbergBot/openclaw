@@ -37,7 +37,7 @@ send_telegram() {
 fetch_movers() {
   curl -fsSL --max-time 15 \
     -H "User-Agent: Mozilla/5.0" \
-    "https://finviz.com/screener.ashx?v=111&s=ta_topgainers&f=sh_avgvol_o500,sh_price_o5&o=-change&c=1,2,3,4,5,6,65" \
+  "https://finviz.com/screener.ashx?v=111&s=ta_topgainers&f=sh_price_o5&o=-change" \
     2>/dev/null || echo ""
 }
 
