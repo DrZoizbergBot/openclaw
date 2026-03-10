@@ -42,7 +42,7 @@ fetch_movers() {
 }
 
 parse_tickers() {
-  echo "$1" | grep -oP '(?<=quote\.ashx\?t=)[A-Z]+' | head -10 | sort -u
+  echo "$1" | grep -oP '(?<=quote\.ashx\?t=)[A-Z]+' | sort -u | head -20
 }
 
 # ─── Fetch quote from Stooq ───────────────────────────────────────────────────
