@@ -45,7 +45,17 @@ fetch_movers() {
 }
 
 parse_tickers() {
-  echo "$1" | grep -oP '(?<=quote\.ashx\?t=)[A-Z]+' | awk '!seen[$0]++' | head -20
+  local result
+  result=$(echo "$1" | grep -oP '(?<=quote\.ashx\?t=)[A-Z]+' | awk '!seen[$0]++' | head -20)
+  if [ -z "$result" ]; then
+    echo "[ERROR] Finviz scrape returned zero tickers — possible block or layout change" >&2
+    send_telegram "⚠️ OpenClaw WARNING | ${TIMESTAMP}
+Finviz scrape failed. Zero tickers returned.
+Possible cause: IP block or HTML layout change.
+Manual check required."
+    exit 1
+  fi
+  echo "$result"
 }
 
 # ─── Fetch quote — Yahoo Finance primary, Stooq fallback ─────────────────────
@@ -96,8 +106,8 @@ RAW_HTML=$(fetch_movers)
 ALL_TICKERS=$(parse_tickers "$RAW_HTML")
 
 if [ -z "$ALL_TICKERS" ]; then
-  echo "[WARN] No tickers fetched from Finviz — using fallback watchlist"
-  ALL_TICKERS="NVDA AMD TSLA MSTR PLTR"
+  echo "[ERROR] ALL_TICKERS empty after parse — exiting"
+  exit 1
 fi
 
 echo "[INFO] Tickers to pre-screen: $ALL_TICKERS"
