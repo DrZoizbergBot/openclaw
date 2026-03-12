@@ -150,11 +150,11 @@ for (const block of blocks) {
   const allocation = allocMatch ? allocMatch[1] : "";
 
   // Fetch headline
-  const headlineRaw = runScript("/data/state/scripts/rss_headline.mjs", [ticker]);
+  const headlineRaw = runScript("/home/davide/openclaw-scripts/rss_headline.mjs", [ticker]);
   const headline = oneLine(headlineRaw).replace(" (Google News RSS)", "") || "No recent headline found";
 
   // Fetch sentiment
-  const sentimentRaw = runScript("/data/state/scripts/sentiment.mjs", [ticker], 12000);
+  const sentimentRaw = runScript("/home/davide/openclaw-scripts/sentiment.mjs", [ticker], 12000);
   const sentiment = safeJSON(sentimentRaw);
 
   // Build rationale via OpenAI
@@ -166,7 +166,7 @@ for (const block of blocks) {
   const stStr = st ? `StockTwits: ${st.bullPercent}% bull` : "StockTwits: n/a";
   const rdStr = rd ? `Reddit: ${rd.mentions} mention${rd.mentions !== 1 ? "s" : ""}` : "Reddit: n/a";
   const sentimentLine = sentiment
-    ? `Sentiment: ${sentiment.sentimentTag} | Score: ${sentiment.sentimentScore} | ${rdStr} | ${stStr}`
+    ? `Sentiment: ${sentiment.sentimentTag} | ${stStr}`
     : `Sentiment: ⚪ UNAVAILABLE`;
 
   // Build price line
@@ -177,14 +177,20 @@ for (const block of blocks) {
     allocation ? `Allocation: ${allocation}` : null,
   ].filter(Boolean).join(" | ");
 
+  // Pass through Market Cap, Proximity, Price timestamp if present
+  const marketCapLine = extractField(block, "Market Cap:");
+  const priceTsLine   = extractField(block, "Price:");
+
   // Assemble block in target format
   const newLines = [
     `Ticker: ${ticker}`,
     priceLine,
+    marketCapLine ? `Market Cap: ${marketCapLine}` : null,
+    priceTsLine   ? `Price: ${priceTsLine}`         : null,
     `News: ${headline} (Google News RSS)`,
     sentimentLine,
     `Rationale: ${rationale}`,
-  ];
+  ].filter(Boolean);
 
   enriched.push({
     ticker,

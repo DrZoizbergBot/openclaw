@@ -12,6 +12,9 @@ TOKEN="${TOKEN:-}"
 CHAT="${CHAT:-}"
 TIMESTAMP="$(TZ='America/New_York' date '+%Y-%m-%d %H:%M EDT')"
 MAX_POSITIONS=3
+declare -A TICKER_CHANGE
+declare -A TICKER_CAP
+declare -A TICKER_PROXIMITY
 CAPITAL=1000
 MAX_PER_TRADE=600   # 60% max concentration
 MIN_PRICE=5
@@ -37,21 +40,20 @@ send_telegram() {
 fetch_movers() {
   curl -fsSL --max-time 15 \
     -H "User-Agent: Mozilla/5.0" \
-    "https://finviz.com/screener.ashx?v=111&s=ta_topgainers&f=sh_avgvol_o500,sh_price_o5&o=-change&c=1,2,3,4,5,6,65" \
+    "https://finviz.com/screener.ashx?v=111&s=ta_topgainers&f=sh_avgvol_o500,sh_price_o5,sh_relvol_o2,cap_midover&o=-change&c=1,2,3,4,5,6,65" \
     2>/dev/null || echo ""
 }
 
 parse_tickers() {
-  echo "$1" | grep -oP '(?<=quote\.ashx\?t=)[A-Z]+' | head -10 | sort -u
+  echo "$1" | grep -oP '(?<=quote\.ashx\?t=)[A-Z]+' | awk '!seen[$0]++' | head -20
 }
 
-# ─── Fetch quote from Stooq ───────────────────────────────────────────────────
+# ─── Fetch quote — Yahoo Finance primary, Stooq fallback ─────────────────────
+# Returns: TICKER|PRICE|HIGH|LOW|OPEN|VOLUME|SOURCE
 
 fetch_quote() {
   local ticker="$1"
-  curl -fsSL --max-time 10 \
-    "https://stooq.com/q/l/?s=${ticker}.us&f=sd2t2ohlcv&h&e=csv" \
-    2>/dev/null | tail -1
+  node /home/davide/openclaw-scripts/fetch_quote.mjs "${ticker}" 2>/dev/null || echo "${ticker}|N/D|N/D|N/D|N/D|N/D|none"
 }
 
 # ─── Calculate trade parameters ───────────────────────────────────────────────
@@ -99,6 +101,26 @@ if [ -z "$ALL_TICKERS" ]; then
 fi
 
 echo "[INFO] Tickers to pre-screen: $ALL_TICKERS"
+while IFS='|' read -r ticker change cap; do
+  TICKER_CHANGE[$ticker]=$change
+  TICKER_CAP[$ticker]=$cap
+done < <(echo "$RAW_HTML" | node -e "
+const chunks = [];
+process.stdin.on('data', c => chunks.push(c));
+process.stdin.on('end', () => {
+  const html = chunks.join('');
+  const rows = html.match(/quote\.ashx\?t=[A-Z]+.*?<\/tr>/g) || [];
+  const seen = new Set();
+  rows.forEach(row => {
+    const ticker = row.match(/quote\.ashx\?t=([A-Z]+)/)?.[1];
+    if (!ticker || seen.has(ticker)) return;
+    seen.add(ticker);
+    const change = row.match(/([\d.]+)%<\/span>/)?.[1] || 'n/a';
+    const cap    = row.match(/>\s*([\d.]+[MBK])\s*<\/a><\/td>/)?.[1] || 'n/a';
+    console.log(ticker + '|' + change + '%|' + cap);
+  });
+});
+")
 
 # ─── Stage 1: Validate prices ─────────────────────────────────────────────────
 
@@ -106,7 +128,12 @@ VALID_TICKERS=""
 
 for TICKER in $ALL_TICKERS; do
   QUOTE=$(fetch_quote "$TICKER")
-  PRICE=$(echo "$QUOTE" | cut -d',' -f7 2>/dev/null || echo "")
+  PRICE=$(echo "$QUOTE"  | cut -d'|' -f2)
+  HIGH=$(echo "$QUOTE"   | cut -d'|' -f3)
+  SOURCE=$(echo "$QUOTE" | cut -d'|' -f7)
+  PRICE_TS=$(echo "$QUOTE" | cut -d'|' -f8)
+
+  echo "[INFO] $TICKER — price: $PRICE source: $SOURCE ts: $PRICE_TS"
 
   if [ -z "$PRICE" ] || [ "$PRICE" = "N/D" ]; then
     echo "[SKIP] $TICKER — no price data"
@@ -118,7 +145,27 @@ for TICKER in $ALL_TICKERS; do
     continue
   fi
 
+  if [ -n "$HIGH" ] && [ "$HIGH" != "N/D" ]; then
+    FADING=$(node -e "
+      const high = parseFloat('$HIGH');
+      const close = parseFloat('$PRICE');
+      const proximity = (close - high) / high * 100;
+      process.exit(proximity < -5 ? 0 : 1);
+    " 2>/dev/null; echo $?)
+PROX_VAL=$(node -e "
+  const high = parseFloat('$HIGH');
+  const close = parseFloat('$PRICE');
+  console.log(((close - high) / high * 100).toFixed(2));
+" 2>/dev/null)
+TICKER_PROXIMITY[$TICKER]=$PROX_VAL    
+if [ "$FADING" = "0" ]; then
+      echo "[SKIP] $TICKER — price $PRICE more than 5% below high $HIGH — momentum fading"
+      continue
+    fi
+  fi
+
   VALID_TICKERS="$VALID_TICKERS $TICKER"
+
 done
 
 VALID_TICKERS=$(echo "$VALID_TICKERS" | xargs)
@@ -135,8 +182,7 @@ echo "[INFO] Valid tickers: $VALID_TICKERS"
 
 echo "[INFO] Pre-screening sentiment for all valid tickers..."
 
-RANKED=$(node "${SCRIPTS_DIR}/sentiment_rank.mjs" $VALID_TICKERS 2>/dev/null || echo "")
-
+RANKED=$(docker exec -i openclaw_gw node "${SCRIPTS_DIR}/sentiment_rank.mjs" $VALID_TICKERS 2>/dev/null || echo "")
 if [ -z "$RANKED" ]; then
   echo "[WARN] Sentiment pre-screen failed — using Finviz order"
   TOP_TICKERS=$(echo "$VALID_TICKERS" | tr ' ' '\n' | head -$MAX_POSITIONS | tr '\n' ' ')
@@ -148,7 +194,7 @@ fi
 
 if [ -z "$TOP_TICKERS" ]; then
   send_telegram "OpenClaw | ${TIMESTAMP}
-No bullish trade ideas found this scan. All movers showing bearish sentiment."
+No qualifying ideas this scan. No movers passed volume and participation thresholds."
   exit 0
 fi
 
@@ -161,7 +207,8 @@ for TICKER in $TOP_TICKERS; do
   [ $COUNT -ge $MAX_POSITIONS ] && break
 
   QUOTE=$(fetch_quote "$TICKER")
-  PRICE=$(echo "$QUOTE" | cut -d',' -f7 2>/dev/null || echo "")
+  PRICE=$(echo "$QUOTE"    | cut -d'|' -f2)
+  PRICE_TS=$(echo "$QUOTE" | cut -d'|' -f8)
 
   if [ -z "$PRICE" ] || [ "$PRICE" = "N/D" ]; then
     echo "[SKIP] $TICKER — no price data"
@@ -175,13 +222,16 @@ for TICKER in $TOP_TICKERS; do
   ALLOCATION=$(echo "$PARAMS" | cut -d'|' -f4)
   SHARES=$(echo "$PARAMS" | cut -d'|' -f5)
 
-  RAW_TRADES="${RAW_TRADES}Ticker: ${TICKER}
+RAW_TRADES="${RAW_TRADES}Ticker: ${TICKER}
 Entry: ${ENTRY} | Stop: ${STOP} | Target: ${TARGET}
 Allocation: ${ALLOCATION} USD | Shares: ${SHARES}
+Market Cap: ${TICKER_CAP[$TICKER]} | Change: ${TICKER_CHANGE[$TICKER]} | Proximity: ${TICKER_PROXIMITY[$TICKER]}%
+Price: ${PRICE} as of ${PRICE_TS}
 Rationale: placeholder
 
 "
-  COUNT=$((COUNT + 1))
+  
+COUNT=$((COUNT + 1))
 done
 
 if [ -z "$RAW_TRADES" ]; then
@@ -194,16 +244,21 @@ fi
 
 echo "[INFO] Enriching with sentiment..."
 
-ENRICHED=$(echo "$RAW_TRADES" | node "${SCRIPTS_DIR}/enrich_watchlist.mjs" 2>/dev/null || echo "$RAW_TRADES")
-
+OPENAI_KEY=$(docker exec openclaw_gw printenv OPENAI_API_KEY 2>/dev/null || echo "")
+ENRICHED=$(echo "$RAW_TRADES" | OPENAI_API_KEY=$OPENAI_KEY node "/home/davide/openclaw-scripts/enrich_watchlist.mjs" 2>/dev/null || echo "$RAW_TRADES")
 # ─── Build final Telegram message ─────────────────────────────────────────────
 
+OPENAI_KEY=$(docker exec openclaw_gw printenv OPENAI_API_KEY)
+WSB=$(docker exec -e OPENAI_API_KEY=$OPENAI_KEY -i openclaw_gw sh -c "cd /data/state/scripts && node wsb_hot.mjs" 2>/dev/null || echo "WSB data unavailable.")
+
 MESSAGE="OpenClaw | ${TIMESTAMP}
-WARNING: Prices delayed ~15-20 min. Verify before executing.
+Price source: Yahoo Finance (near real-time). Verify before executing.
 
 — BUY IDEAS —
 
-${ENRICHED}"
+${ENRICHED}
+
+${WSB}"
 
 # ─── Send to Telegram ─────────────────────────────────────────────────────────
 
