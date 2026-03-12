@@ -172,11 +172,14 @@ async function fetchStockTwits(ticker) {
       }
       const total = bull + bear;
       const bullPercent = total > 0 ? Math.round((bull / total) * 100) : 50;
+      const uniqueUsers = new Set(json.messages.map(m => m?.user?.username).filter(Boolean)).size;
+      const participationRatio = json.messages.length > 0 ? uniqueUsers / json.messages.length : 0;
       return {
         bullPercent,
         bearPercent: 100 - bullPercent,
         messageCount: json.messages.length,
         labeledCount: total,
+        participationRatio: parseFloat(participationRatio.toFixed(2)),
       };
     } catch {
       continue;

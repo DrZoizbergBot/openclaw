@@ -136,7 +136,9 @@ async function fetchStockTwits(ticker) {
       }
       const total = bull + bear;
       const bullPercent = total > 0 ? Math.round((bull / total) * 100) : 50;
-      return { bullPercent, messageCount: json.messages.length, labeledCount: total };
+      const uniqueUsers = new Set(json.messages.map(m => m?.user?.username).filter(Boolean)).size;
+      const participationRatio = json.messages.length > 0 ? uniqueUsers / json.messages.length : 0;
+      return { bullPercent, messageCount: json.messages.length, labeledCount: total, participationRatio };
     } catch {
       continue;
     }
@@ -172,6 +174,20 @@ const results = await Promise.all(tickers.map(async (ticker) => {
     fetchReddit(ticker),
     fetchStockTwits(ticker),
   ]);
+  // Step 3 cutoff — minimum 10 labeled messages and 75% participation ratio
+  if (!stocktwits) {
+    process.stderr.write(`[SKIP] ${ticker} — StockTwits unavailable\n`);
+    return null;
+  }
+  if (stocktwits.labeledCount < 10) {
+    process.stderr.write(`[SKIP] ${ticker} — StockTwits labeled messages: ${stocktwits.labeledCount} (min 10)\n`);
+    return null;
+  }
+  if (stocktwits.participationRatio < 0.75) {
+    process.stderr.write(`[SKIP] ${ticker} — StockTwits participation: ${(stocktwits.participationRatio * 100).toFixed(0)}% (min 75%)\n`);
+    return null;
+  }
+
   const score = computeScore(reddit, stocktwits);
   const label = scoreToLabel(score);
   const stVolume = stocktwits?.messageCount || 0;
@@ -179,12 +195,13 @@ const results = await Promise.all(tickers.map(async (ticker) => {
 }));
 
 // Sort by score descending, tie-break by StockTwits message volume
-results.sort((a, b) => {
+const filtered = results.filter(r => r !== null);
+filtered.sort((a, b) => {
   if (b.score !== a.score) return b.score - a.score;
   return (b.stVolume || 0) - (a.stVolume || 0);
 });
 
 // Output tab-separated
-for (const r of results) {
+for (const r of filtered) {
   process.stdout.write(`${r.score}\t${r.label}\t${r.ticker}\n`);
 }
