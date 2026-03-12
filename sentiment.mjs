@@ -208,10 +208,7 @@ function scoreToLabel(score) {
 }
 
 function scoreToTag(score) {
-  const label = scoreToLabel(score);
-  if (label === "BULLISH") return "🟢 BULLISH";
-  if (label === "BEARISH") return "🔴 BEARISH";
-  return "🟡 NEUTRAL";
+  return scoreToLabel(score);
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
