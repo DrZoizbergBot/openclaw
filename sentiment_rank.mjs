@@ -188,14 +188,14 @@ const results = await Promise.all(tickers.map(async (ticker) => {
     return null;
   }
 
-  const score = computeScore(reddit, stocktwits);
+  const score = stocktwits.bullPercent / 100;
   const label = scoreToLabel(score);
-  const stVolume = stocktwits?.messageCount || 0;
+  const stVolume = stocktwits.messageCount || 0;
   return { ticker, score, label, stVolume };
 }));
 
 // Sort by score descending, tie-break by StockTwits message volume
-const filtered = results.filter(r => r !== null);
+const filtered = results.filter(r => r !== null && r.label !== "BEARISH");
 filtered.sort((a, b) => {
   if (b.score !== a.score) return b.score - a.score;
   return (b.stVolume || 0) - (a.stVolume || 0);
