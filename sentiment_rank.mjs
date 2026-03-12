@@ -128,17 +128,20 @@ async function fetchStockTwits(ticker) {
       if (status !== 200) continue;
       const json = safeJSON(data);
       if (!json?.messages) continue;
+      const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+      const recent = json.messages.filter(m => new Date(m.created_at).getTime() >= cutoff);
+
       let bull = 0, bear = 0;
-      for (const msg of json.messages) {
+      for (const msg of recent) {
         const s = msg?.entities?.sentiment?.basic;
         if (s === "Bullish") bull++;
         else if (s === "Bearish") bear++;
       }
       const total = bull + bear;
       const bullPercent = total > 0 ? Math.round((bull / total) * 100) : 50;
-      const uniqueUsers = new Set(json.messages.map(m => m?.user?.username).filter(Boolean)).size;
-      const participationRatio = json.messages.length > 0 ? uniqueUsers / json.messages.length : 0;
-      return { bullPercent, messageCount: json.messages.length, labeledCount: total, participationRatio };
+      const uniqueUsers = new Set(recent.map(m => m?.user?.username).filter(Boolean)).size;
+      const participationRatio = recent.length > 0 ? uniqueUsers / recent.length : 0;
+      return { bullPercent, messageCount: recent.length, labeledCount: total, participationRatio };
     } catch {
       continue;
     }
