@@ -14,6 +14,40 @@ function runScript(scriptPath, args = [], timeoutMs = 10000) {
 
 function safeJSON(str) { try { return JSON.parse(str); } catch { return null; } }
 
+// ─── Confidence Score ─────────────────────────────────────────────────────────
+
+function proximityScore(proximity) {
+  const score = 100 + (parseFloat(proximity) * 10);
+  return Math.max(0, Math.min(100, score));
+}
+
+function changeScore(change) {
+  const c = parseFloat(change);
+  if (c < 5)  return 20;
+  if (c < 8)  return 40;
+  if (c < 15) return 100;
+  if (c < 25) return 85;
+  return 25;
+}
+
+function sentimentBoost(bullPercent, labeledCount) {
+  if (!labeledCount || labeledCount < 8) return 0;
+  return bullPercent;
+}
+
+function computeConfidence(proximity, change, bullPercent, labeledCount) {
+  const p = proximityScore(proximity);
+  const c = changeScore(change);
+  const s = sentimentBoost(bullPercent, labeledCount);
+  return parseFloat(((p * 0.50) + (c * 0.42) + (s * 0.08)).toFixed(1));
+}
+
+function confidenceLabel(score) {
+  if (score >= 75) return "HIGH";
+  if (score >= 50) return "MEDIUM";
+  return "LOW";
+}
+
 async function buildRationale({ ticker, entry, stop, headline, sentiment }) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return "Rationale unavailable (no API key).";
@@ -82,6 +116,12 @@ for (const block of blocks) {
   const fullText = block.join(" ");
   const entry = extractPrice(fullText, "Entry");
   const stop  = extractPrice(fullText, "Stop");
+
+  // Extract proximity and change for confidence score
+  const proximityMatch = fullText.match(/Proximity:\s*(-?[\d.]+)/i);
+  const changeMatch    = fullText.match(/Change:\s*([\d.]+)/i);
+  const proximity      = proximityMatch ? parseFloat(proximityMatch[1]) : 0;
+  const change         = changeMatch    ? parseFloat(changeMatch[1])    : 0;
   const allocMatch = fullText.match(/Allocation:\s*([\d.]+ USD(?:\s*\|\s*Shares:\s*\d+)?)/i);
   const allocation = allocMatch ? allocMatch[1] : "";
 
@@ -99,6 +139,13 @@ for (const block of blocks) {
     ? `Sentiment: ${sentiment.sentimentLabel} | ${stStr}`
     : `Sentiment: UNAVAILABLE`;
 
+  // Compute confidence score
+  const bullPct    = st?.bullPercent ?? 0;
+  const labeledCnt = st?.labeledCount ?? 0;
+  const confScore  = computeConfidence(proximity, change, bullPct, labeledCnt);
+  const confLabel  = confidenceLabel(confScore);
+  const confidenceLine = `Confidence: ${confScore}/100 — ${confLabel}`;
+
   const priceLine = [
     entry      ? `Entry: ${entry}`           : null,
     stop       ? `Stop: ${stop}`             : null,
@@ -113,6 +160,7 @@ for (const block of blocks) {
     priceLine,
     marketCapLine ? `Market Cap: ${marketCapLine}` : null,
     priceTsLine   ? `Price: ${priceTsLine}`         : null,
+    confidenceLine,
     `News: ${headline}`,
     sentimentLine,
     `Rationale: ${rationale}`,

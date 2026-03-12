@@ -188,18 +188,27 @@ fi
 
 echo "[INFO] Valid tickers: $VALID_TICKERS"
 
-# ─── Stage 2: Rank all valid tickers by sentiment ─────────────────────────────
+# ─── Stage 2: Rank all valid tickers by confidence score ─────────────────────
 
-echo "[INFO] Pre-screening sentiment for all valid tickers..."
+echo "[INFO] Ranking tickers by confidence score..."
 
-RANKED=$(docker exec -i openclaw_gw node "${SCRIPTS_DIR}/sentiment_rank.mjs" $VALID_TICKERS 2>/dev/null || echo "")
+# Build TICKER,PROXIMITY,CHANGE arguments
+TICKER_ARGS=""
+for TICKER in $VALID_TICKERS; do
+  PROX="${TICKER_PROXIMITY[$TICKER]:-0}"
+  CHANGE="${TICKER_CHANGE[$TICKER]:-0}"
+  CHANGE="${CHANGE//%/}"
+  TICKER_ARGS="$TICKER_ARGS ${TICKER},${PROX},${CHANGE}"
+done
+TICKER_ARGS=$(echo "$TICKER_ARGS" | xargs)
+
+RANKED=$(node /home/davide/openclaw-scripts/sentiment_rank.mjs $TICKER_ARGS 2>/dev/null || echo "")
 if [ -z "$RANKED" ]; then
-  echo "[WARN] Sentiment pre-screen failed — using Finviz order"
+  echo "[WARN] Confidence ranking failed — using Finviz order"
   TOP_TICKERS=$(echo "$VALID_TICKERS" | tr ' ' '\n' | head -$MAX_POSITIONS | tr '\n' ' ')
 else
-  # Pick top N by sentiment score, exclude BEARISH
-  TOP_TICKERS=$(echo "$RANKED" | awk -F'\t' '$2 != "BEARISH" {print $3}' | head -$MAX_POSITIONS | tr '\n' ' ')
-  echo "[INFO] Top tickers by sentiment: $TOP_TICKERS"
+  TOP_TICKERS=$(echo "$RANKED" | awk -F'\t' '{print $3}' | head -$MAX_POSITIONS | tr '\n' ' ')
+  echo "[INFO] Top tickers by confidence: $TOP_TICKERS"
 fi
 
 if [ -z "$TOP_TICKERS" ]; then

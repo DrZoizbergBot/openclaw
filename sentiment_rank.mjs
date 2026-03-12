@@ -1,7 +1,11 @@
 /**
  * sentiment_rank.mjs
- * Ranks tickers by StockTwits sentiment score.
- * Usage: node sentiment_rank.mjs TICKER1 TICKER2 ...
+ * Ranks tickers by confidence score.
+ * Usage: node sentiment_rank.mjs TICKER,PROXIMITY,CHANGE TICKER,PROXIMITY,CHANGE ...
+ * Example: node sentiment_rank.mjs FLY,-3.20,18.28 CF,-1.30,12.91
+ *
+ * Output (tab-separated):
+ *   SCORE\tLABEL\tTICKER\tCONFIDENCE\tCONFIDENCE_LABEL
  */
 
 import https from "https";
@@ -60,34 +64,97 @@ async function fetchStockTwits(ticker) {
         else if (s === "Bearish") bear++;
       }
       const total = bull + bear;
-      const bullPercent = total > 0 ? Math.round((bull / total) * 100) : 50;
-      const uniqueUsers = new Set(recent.map(m => m?.user?.username).filter(Boolean)).size;
-      const participationRatio = recent.length > 0 ? uniqueUsers / recent.length : 0;
-      return { bullPercent, messageCount: recent.length, labeledCount: total, participationRatio };
+      const bullPercent = total > 0 ? Math.round((bull / total) * 100) : 0;
+      return { bullPercent, labeledCount: total };
     } catch { continue; }
   }
   return null;
 }
 
-function scoreToLabel(score) {
-  if (score >= 0.55) return "BULLISH";
-  if (score <= 0.42) return "BEARISH";
+// ─── Confidence Score ─────────────────────────────────────────────────────────
+
+function proximityScore(proximity) {
+  // proximity is negative (e.g. -1.30)
+  // 0% = 100, -5% = 50, -10% = 0
+  const score = 100 + (proximity * 10);
+  return Math.max(0, Math.min(100, score));
+}
+
+function changeScore(change) {
+  if (change < 5)  return 20;
+  if (change < 8)  return 40;
+  if (change < 15) return 100;
+  if (change < 25) return 85;
+  return 25;
+}
+
+function sentimentScore(bullPercent, labeledCount) {
+  // Only applies if labeled >= 8
+  if (labeledCount < 8) return 0;
+  return bullPercent;
+}
+
+function computeConfidence(proximity, change, bullPercent, labeledCount) {
+  const pScore = proximityScore(proximity);
+  const cScore = changeScore(change);
+  const sScore = sentimentScore(bullPercent, labeledCount);
+
+  const total = (pScore * 0.50) + (cScore * 0.42) + (sScore * 0.08);
+  return parseFloat(total.toFixed(1));
+}
+
+function confidenceLabel(score) {
+  if (score >= 75) return "HIGH";
+  if (score >= 50) return "MEDIUM";
+  return "LOW";
+}
+
+function sentimentLabel(bullPercent, labeledCount) {
+  if (labeledCount < 8) return "NEUTRAL";
+  if (bullPercent >= 60) return "BULLISH";
+  if (bullPercent <= 40) return "BEARISH";
   return "NEUTRAL";
 }
 
-const tickers = process.argv.slice(2).map(t => t.toUpperCase()).filter(Boolean);
-if (tickers.length === 0) { console.error("Usage: node sentiment_rank.mjs TICKER1 TICKER2 ..."); process.exit(2); }
+// ─── Main ─────────────────────────────────────────────────────────────────────
 
-const results = await Promise.all(tickers.map(async (ticker) => {
+// Input format: TICKER,PROXIMITY,CHANGE
+const inputs = process.argv.slice(2).map(arg => {
+  const [ticker, proximity, change] = arg.split(",");
+  return {
+    ticker: ticker.toUpperCase(),
+    proximity: parseFloat(proximity),
+    change: parseFloat(change),
+  };
+}).filter(i => i.ticker && !isNaN(i.proximity) && !isNaN(i.change));
+
+if (inputs.length === 0) {
+  console.error("Usage: node sentiment_rank.mjs TICKER,PROXIMITY,CHANGE ...");
+  process.exit(2);
+}
+
+const results = await Promise.all(inputs.map(async ({ ticker, proximity, change }) => {
   const st = await fetchStockTwits(ticker);
-  if (!st) { process.stderr.write(`[SKIP] ${ticker} — StockTwits unavailable\n`); return null; }
-  if (st.labeledCount < 10) { process.stderr.write(`[SKIP] ${ticker} — labeled messages: ${st.labeledCount} (min 10)\n`); return null; }
-  if (st.participationRatio < 0.75) { process.stderr.write(`[SKIP] ${ticker} — participation: ${(st.participationRatio * 100).toFixed(0)}% (min 75%)\n`); return null; }
-  const score = st.bullPercent / 100;
-  const label = scoreToLabel(score);
-  return { ticker, score, label, stVolume: st.messageCount };
+  const bullPercent = st?.bullPercent ?? 0;
+  const labeledCount = st?.labeledCount ?? 0;
+
+  const confidence = computeConfidence(proximity, change, bullPercent, labeledCount);
+  const label = confidenceLabel(confidence);
+  const sentiment = sentimentLabel(bullPercent, labeledCount);
+
+  process.stderr.write(
+    `[RANK] ${ticker} | proximity: ${proximity}% | change: ${change}% | ` +
+    `labeled: ${labeledCount} | bull: ${bullPercent}% | confidence: ${confidence} ${label}\n`
+  );
+
+  return { ticker, confidence, label, sentiment, bullPercent, labeledCount };
 }));
 
-const filtered = results.filter(r => r !== null && r.label !== "BEARISH");
-filtered.sort((a, b) => b.score !== a.score ? b.score - a.score : (b.stVolume || 0) - (a.stVolume || 0));
-for (const r of filtered) process.stdout.write(`${r.score}\t${r.label}\t${r.ticker}\n`);
+// Filter BEARISH sentiment, sort by confidence descending
+const filtered = results
+  .filter(r => r.sentiment !== "BEARISH")
+  .sort((a, b) => b.confidence - a.confidence);
+
+for (const r of filtered) {
+  process.stdout.write(`${r.confidence}\t${r.label}\t${r.ticker}\t${r.bullPercent}\t${r.labeledCount}\n`);
+}
