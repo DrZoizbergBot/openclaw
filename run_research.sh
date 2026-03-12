@@ -258,17 +258,14 @@ OPENAI_KEY=$(docker exec openclaw_gw printenv OPENAI_API_KEY 2>/dev/null || echo
 ENRICHED=$(echo "$RAW_TRADES" | OPENAI_API_KEY=$OPENAI_KEY node "/home/davide/openclaw-scripts/enrich_watchlist.mjs" 2>/dev/null || echo "$RAW_TRADES")
 # ─── Build final Telegram message ─────────────────────────────────────────────
 
-OPENAI_KEY=$(docker exec openclaw_gw printenv OPENAI_API_KEY)
-WSB=$(docker exec -e OPENAI_API_KEY=$OPENAI_KEY -i openclaw_gw sh -c "cd /data/state/scripts && node wsb_hot.mjs" 2>/dev/null || echo "WSB data unavailable.")
 
 MESSAGE="OpenClaw | ${TIMESTAMP}
 Price source: Yahoo Finance (near real-time). Verify before executing.
 
 — BUY IDEAS —
 
-${ENRICHED}
+${ENRICHED}"
 
-${WSB}"
 
 # ─── Send to Telegram ─────────────────────────────────────────────────────────
 
