@@ -170,12 +170,13 @@ for (const block of blocks) {
     ticker,
     sentimentScore: sentiment?.sentimentScore ?? 0.5,
     sentimentLabel: sentiment?.sentimentLabel ?? "NEUTRAL",
+    confScore,
     lines: newLines,
   });
 }
 
 const tradeBlocks = enriched.filter(b => b.ticker !== null);
-tradeBlocks.sort((a, b) => (b.sentimentScore || 0) - (a.sentimentScore || 0));
+tradeBlocks.sort((a, b) => (b.confScore || 0) - (a.confScore || 0));
 const filteredBlocks = tradeBlocks.filter(b => b.sentimentLabel !== "BEARISH");
 filteredBlocks.forEach((b, i) => b.lines.push(`Rank: #${i + 1}`));
 
