@@ -1,0 +1,5 @@
+config.env
+.tg_offset
+monitor.log
+portfolio.json
+*.log
