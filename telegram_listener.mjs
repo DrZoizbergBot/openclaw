@@ -152,6 +152,11 @@ async function processMessage(msg) {
     }
 
   // ── PORTFOLIO ───────────────────────────────────────────────────────────────
+  } else if (text === 'SCAN' || text === '/SCAN') {
+    await sendTelegram('Scan started...');
+    const { execFile } = await import('child_process');
+    execFile('bash', ['/home/davide/openclaw-scripts/run_research.sh'], { env: { ...process.env, TOKEN, CHAT } }, () => {});
+
   } else if (text === "PORTFOLIO" || text === "/PORTFOLIO") {
     const portfolio = loadPortfolio();
     if (portfolio.positions.length === 0) {
