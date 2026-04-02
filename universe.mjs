@@ -8,5 +8,5 @@ export const UNIVERSE = [
   'JPM', 'BAC', 'GS', 'MS', 'WFC', 'C', 'BX', 'KKR', 'APO', 'ARES',
   'XOM', 'CVX', 'COP', 'OXY', 'DVN', 'MRO', 'HAL', 'SLB', 'BKR', 'NOV',
   'LLY', 'NVO', 'PFE', 'MRNA', 'BNTX', 'GILD', 'BIIB', 'VRTX', 'REGN', 'AMGN',
-  'SPY', 'QQQ', 'IWM', 'DIA', 'SOXS', 'SOXL', 'TQQQ', 'SQQQ', 'UVXY', 'VXX'
+  'SPY', 'QQQ', 'IWM', 'DIA'
 ];

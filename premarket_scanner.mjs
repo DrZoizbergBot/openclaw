@@ -41,22 +41,24 @@ async function scan() {
 
   for (const [symbol, snap] of Object.entries(snapshots)) {
     try {
-      const prevClose = snap.prevDailyBar?.c;  // yesterday's close
-      const todayOpen = snap.dailyBar?.o;       // today's open
+      const prevClose = snap.prevDailyBar?.c;
+      const todayOpen = snap.dailyBar?.o;
       const currentPrice = snap.dailyBar?.c || snap.minuteBar?.c;
       const vol = snap.dailyBar?.v || 0;
 
-      if (!prevClose || !todayOpen) continue;
+      if (!prevClose || !todayOpen || !currentPrice) continue;
 
-      // Gap = today's open vs yesterday's close
       const gapPct = ((todayOpen - prevClose) / prevClose) * 100;
       if (gapPct < MIN_GAP_PCT) continue;
+
+      // Filter fading gaps — current price must be above open
+      if (currentPrice < todayOpen) continue;
 
       candidates.push({
         symbol,
         prevClose: prevClose.toFixed(2),
         todayOpen: todayOpen.toFixed(2),
-        currentPrice: currentPrice?.toFixed(2) || todayOpen.toFixed(2),
+        currentPrice: currentPrice.toFixed(2),
         gapPct: gapPct.toFixed(2),
         vol,
       });
@@ -68,7 +70,7 @@ async function scan() {
   candidates.sort((a, b) => parseFloat(b.gapPct) - parseFloat(a.gapPct));
 
   if (candidates.length === 0) {
-    const msg = `🔍 *Opening gap scan complete*\nNo gap candidates found above ${MIN_GAP_PCT}%.`;
+    const msg = `🔍 *Opening gap scan complete*\nNo gap candidates found above ${MIN_GAP_PCT}% with follow-through.`;
     await sendTelegram(msg);
     console.log('No candidates found.');
     return [];
