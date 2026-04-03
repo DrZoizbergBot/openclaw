@@ -1,5 +1,6 @@
 import { UNIVERSE } from './universe.mjs';
 import { getNews } from './finnhub_client.mjs';
+import { readFileSync, existsSync } from 'fs';
 
 const TOKEN = process.env.TOKEN;
 const CHAT = process.env.CHAT;
@@ -11,11 +12,24 @@ const MIN_PROXIMITY = -3.0;
 const MIN_CHANGE = 3.0;
 const POLL_INTERVAL_MS = 60 * 1000;
 
-// One alert per symbol per day
 const alertedToday = new Set();
-
 const state = {};
 const avgVolumes = {};
+let gapSymbols = new Set(); // symbols from gap watchlist
+
+function loadGapWatchlist() {
+  try {
+    const path = '/home/davide/openclaw-scripts/gap_watchlist.json';
+    if (!existsSync(path)) return;
+    const data = JSON.parse(readFileSync(path, 'utf8'));
+    const today = new Date().toISOString().split('T')[0];
+    if (data.date !== today) return; // stale — different day
+    gapSymbols = new Set(data.candidates.map(c => c.symbol));
+    console.log(`Gap watchlist loaded: ${gapSymbols.size} symbols — ${[...gapSymbols].join(', ')}`);
+  } catch {
+    console.log('No gap watchlist found — proceeding without gap boost.');
+  }
+}
 
 function isMarketHours() {
   const now = new Date();
@@ -23,18 +37,15 @@ function isMarketHours() {
   const hours = et.getHours();
   const minutes = et.getMinutes();
   const day = et.getDay();
-
-  // Monday-Friday only
   if (day === 0 || day === 6) return false;
-
-  // 9:30 AM to 4:00 PM ET only
   const totalMinutes = hours * 60 + minutes;
-  return totalMinutes >= 570 && totalMinutes < 960; // 9:30 = 570, 16:00 = 960
+  return totalMinutes >= 570 && totalMinutes < 960;
 }
 
 function resetDailyState() {
   alertedToday.clear();
   Object.keys(state).forEach(k => delete state[k]);
+  gapSymbols.clear();
   console.log('Daily state reset.');
 }
 
@@ -89,7 +100,6 @@ async function initAvgVolumes() {
 }
 
 async function evaluate(symbol, snap) {
-  // Skip if already alerted today
   if (alertedToday.has(symbol)) return;
 
   const prevClose = snap.prevDailyBar?.c;
@@ -99,12 +109,12 @@ async function evaluate(symbol, snap) {
 
   if (!prevClose || !price) return;
 
-  // Verify data is from today
+  // Stale data check
   const barDate = snap.dailyBar?.t;
   if (barDate) {
     const barDay = new Date(barDate).toDateString();
     const today = new Date().toDateString();
-    if (barDay !== today) return; // stale data — skip
+    if (barDay !== today) return;
   }
 
   if (!state[symbol]) state[symbol] = { sessionHigh };
@@ -115,16 +125,20 @@ async function evaluate(symbol, snap) {
   const avgVol = avgVolumes[symbol];
   const rvol = avgVol ? vol / avgVol : null;
 
-  const passChange = changePct >= MIN_CHANGE;
+  // Gap boost — lower thresholds for gap watchlist symbols
+  const isGapStock = gapSymbols.has(symbol);
+  const minChange = isGapStock ? 2.0 : MIN_CHANGE;
+  const minRvol = isGapStock ? 1.2 : MIN_RVOL;
+
+  const passChange = changePct >= minChange;
   const passProximity = proximityPct >= MIN_PROXIMITY;
-  const passRvol = rvol ? rvol >= MIN_RVOL : true;
+  const passRvol = rvol ? rvol >= minRvol : true;
 
   if (!passChange || !passProximity || !passRvol) return;
 
-  // Mark as alerted today
   alertedToday.add(symbol);
 
-  console.log(`ALERT: ${symbol} | Change: ${changePct.toFixed(2)}% | Proximity: ${proximityPct.toFixed(2)}% | RVOL: ${rvol?.toFixed(2)}x`);
+  console.log(`ALERT: ${symbol} | Change: ${changePct.toFixed(2)}% | Proximity: ${proximityPct.toFixed(2)}% | RVOL: ${rvol?.toFixed(2)}x | Gap stock: ${isGapStock}`);
 
   let newsLine = 'No recent news';
   try {
@@ -135,9 +149,10 @@ async function evaluate(symbol, snap) {
   const entry = (price * 1.005).toFixed(2);
   const stop = (price * 0.955).toFixed(2);
   const timeET = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' });
+  const gapTag = isGapStock ? ' 🌅 Gap & Go' : '';
 
   const msg =
-    `🚀 *BREAKOUT ALERT*\n` +
+    `🚀 *BREAKOUT ALERT${gapTag}*\n` +
     `Ticker: *${symbol}*\n` +
     `Price: $${price.toFixed(2)} as of ${timeET} ET\n` +
     `Change: +${changePct.toFixed(2)}% | Proximity: ${proximityPct.toFixed(2)}%\n` +
@@ -149,6 +164,9 @@ async function evaluate(symbol, snap) {
 }
 
 async function poll() {
+  // Reload gap watchlist on each poll in case scanner ran after pipeline started
+  loadGapWatchlist();
+
   if (!isMarketHours()) {
     console.log(`Outside market hours — skipping poll at ${new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' })} ET`);
     return;
@@ -170,8 +188,8 @@ async function poll() {
 async function run() {
   console.log(`Pipeline started at ${new Date().toISOString()}`);
   await initAvgVolumes();
+  loadGapWatchlist();
 
-  // Reset state at midnight ET every day
   setInterval(() => {
     const et = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
     const etDate = new Date(et);

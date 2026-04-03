@@ -1,9 +1,8 @@
 import { UNIVERSE } from './universe.mjs';
+import { writeFileSync } from 'fs';
 
 const KEY = process.env.ALPACA_KEY;
 const SECRET = process.env.ALPACA_SECRET;
-const TOKEN = process.env.TOKEN;
-const CHAT = process.env.CHAT;
 const BASE = 'https://data.alpaca.markets';
 
 const MIN_GAP_PCT = 3.0;
@@ -16,14 +15,6 @@ async function alpacaGet(path) {
     }
   });
   return res.json();
-}
-
-async function sendTelegram(message) {
-  await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: CHAT, text: message, parse_mode: 'Markdown' }),
-  });
 }
 
 async function scan() {
@@ -51,42 +42,37 @@ async function scan() {
       const gapPct = ((todayOpen - prevClose) / prevClose) * 100;
       if (gapPct < MIN_GAP_PCT) continue;
 
-      // Filter fading gaps — current price must be above open
+      // Filter fading gaps
       if (currentPrice < todayOpen) continue;
 
       candidates.push({
         symbol,
-        prevClose: prevClose.toFixed(2),
-        todayOpen: todayOpen.toFixed(2),
-        currentPrice: currentPrice.toFixed(2),
-        gapPct: gapPct.toFixed(2),
+        prevClose: parseFloat(prevClose.toFixed(2)),
+        todayOpen: parseFloat(todayOpen.toFixed(2)),
+        currentPrice: parseFloat(currentPrice.toFixed(2)),
+        gapPct: parseFloat(gapPct.toFixed(2)),
         vol,
+        scannedAt: new Date().toISOString(),
       });
     } catch {
       continue;
     }
   }
 
-  candidates.sort((a, b) => parseFloat(b.gapPct) - parseFloat(a.gapPct));
+  candidates.sort((a, b) => b.gapPct - a.gapPct);
 
-  if (candidates.length === 0) {
-    const msg = `🔍 *Opening gap scan complete*\nNo gap candidates found above ${MIN_GAP_PCT}% with follow-through.`;
-    await sendTelegram(msg);
-    console.log('No candidates found.');
-    return [];
-  }
+  // Write to JSON file for pipeline to consume
+  const output = {
+    date: new Date().toISOString().split('T')[0],
+    candidates,
+  };
 
-  let msg = `🌅 *Opening Gap Watchlist — ${new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' })} ET*\n`;
-  msg += `${candidates.length} candidate(s) found:\n\n`;
-
+  writeFileSync('/home/davide/openclaw-scripts/gap_watchlist.json', JSON.stringify(output, null, 2));
+  console.log(`Gap watchlist written: ${candidates.length} candidates.`);
   candidates.forEach((c, i) => {
-    msg += `*#${i + 1} ${c.symbol}*\n`;
-    msg += `Gap: +${c.gapPct}% | Open: $${c.todayOpen} | Now: $${c.currentPrice}\n`;
-    msg += `PrevClose: $${c.prevClose} | Vol: ${c.vol.toLocaleString()}\n\n`;
+    console.log(`#${i + 1} ${c.symbol} | Gap: +${c.gapPct}% | Open: $${c.todayOpen} | Now: $${c.currentPrice}`);
   });
 
-  await sendTelegram(msg);
-  console.log(`Sent ${candidates.length} candidates to Telegram.`);
   return candidates;
 }
 
