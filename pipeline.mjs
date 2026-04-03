@@ -9,12 +9,34 @@ const SECRET = process.env.ALPACA_SECRET;
 const MIN_RVOL = 1.5;
 const MIN_PROXIMITY = -3.0;
 const MIN_CHANGE = 3.0;
-const ALERT_COOLDOWN_MS = 30 * 60 * 1000;
 const POLL_INTERVAL_MS = 60 * 1000;
 
+// One alert per symbol per day
+const alertedToday = new Set();
+
 const state = {};
-const lastAlerted = {};
 const avgVolumes = {};
+
+function isMarketHours() {
+  const now = new Date();
+  const et = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const hours = et.getHours();
+  const minutes = et.getMinutes();
+  const day = et.getDay();
+
+  // Monday-Friday only
+  if (day === 0 || day === 6) return false;
+
+  // 9:30 AM to 4:00 PM ET only
+  const totalMinutes = hours * 60 + minutes;
+  return totalMinutes >= 570 && totalMinutes < 960; // 9:30 = 570, 16:00 = 960
+}
+
+function resetDailyState() {
+  alertedToday.clear();
+  Object.keys(state).forEach(k => delete state[k]);
+  console.log('Daily state reset.');
+}
 
 async function sendTelegram(message) {
   await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
@@ -61,12 +83,15 @@ async function initAvgVolumes() {
   for (const symbol of UNIVERSE) {
     const avg = await fetchAvgVolume(symbol);
     if (avg) avgVolumes[symbol] = avg;
-    await new Promise(r => setTimeout(r, 200)); // rate limit
+    await new Promise(r => setTimeout(r, 200));
   }
   console.log(`Average volumes loaded for ${Object.keys(avgVolumes).length} symbols.`);
 }
 
 async function evaluate(symbol, snap) {
+  // Skip if already alerted today
+  if (alertedToday.has(symbol)) return;
+
   const prevClose = snap.prevDailyBar?.c;
   const price = snap.dailyBar?.c || snap.minuteBar?.c;
   const sessionHigh = snap.dailyBar?.h || price;
@@ -74,7 +99,14 @@ async function evaluate(symbol, snap) {
 
   if (!prevClose || !price) return;
 
-  // Update session high
+  // Verify data is from today
+  const barDate = snap.dailyBar?.t;
+  if (barDate) {
+    const barDay = new Date(barDate).toDateString();
+    const today = new Date().toDateString();
+    if (barDay !== today) return; // stale data — skip
+  }
+
   if (!state[symbol]) state[symbol] = { sessionHigh };
   if (sessionHigh > state[symbol].sessionHigh) state[symbol].sessionHigh = sessionHigh;
 
@@ -89,9 +121,8 @@ async function evaluate(symbol, snap) {
 
   if (!passChange || !passProximity || !passRvol) return;
 
-  const now = Date.now();
-  if (lastAlerted[symbol] && now - lastAlerted[symbol] < ALERT_COOLDOWN_MS) return;
-  lastAlerted[symbol] = now;
+  // Mark as alerted today
+  alertedToday.add(symbol);
 
   console.log(`ALERT: ${symbol} | Change: ${changePct.toFixed(2)}% | Proximity: ${proximityPct.toFixed(2)}% | RVOL: ${rvol?.toFixed(2)}x`);
 
@@ -118,6 +149,11 @@ async function evaluate(symbol, snap) {
 }
 
 async function poll() {
+  if (!isMarketHours()) {
+    console.log(`Outside market hours — skipping poll at ${new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' })} ET`);
+    return;
+  }
+
   const timeET = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' });
   console.log(`Polling at ${timeET} ET...`);
 
@@ -135,7 +171,13 @@ async function run() {
   console.log(`Pipeline started at ${new Date().toISOString()}`);
   await initAvgVolumes();
 
-  // Poll immediately then every minute
+  // Reset state at midnight ET every day
+  setInterval(() => {
+    const et = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+    const etDate = new Date(et);
+    if (etDate.getHours() === 0 && etDate.getMinutes() === 0) resetDailyState();
+  }, 60 * 1000);
+
   await poll();
   setInterval(poll, POLL_INTERVAL_MS);
 }
