@@ -40,3 +40,8 @@ export async function getEarnings(symbol) {
     surprisePercent: last.surprisePercent,
   } : null;
 }
+
+export async function getFloat(symbol) {
+  const data = await get(`/stock/profile2?symbol=${symbol}`);
+  return data?.shareOutstanding ? data.shareOutstanding * 1e6 : null;
+}

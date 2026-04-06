@@ -1,5 +1,5 @@
 import { UNIVERSE } from './universe.mjs';
-import { getNews } from './finnhub_client.mjs';
+import { getNews, getFloat } from './finnhub_client.mjs';
 import { readFileSync, existsSync } from 'fs';
 
 const TOKEN = process.env.TOKEN;
@@ -12,12 +12,13 @@ const MIN_PROXIMITY = -3.0;
 const MIN_CHANGE = 3.0;
 const POLL_INTERVAL_MS = 60 * 1000;
 const ATR_PERIOD = 14;
-const RVOL_WINDOW = 5;   // number of readings to track for trend
-const OBV_WINDOW = 5;    // number of bars to check for divergence
+const RVOL_WINDOW = 5;
+const OBV_WINDOW = 5;
 
 const alertedToday = new Set();
 const state = {};
 const avgVolumes = {};
+const floatShares = {};
 let gapSymbols = new Set();
 
 function loadGapWatchlist() {
@@ -95,19 +96,9 @@ function detectOBVDivergence(bars) {
   const recent = bars.slice(-OBV_WINDOW - 1);
   const obvSeries = computeOBV(recent);
   if (obvSeries.length < OBV_WINDOW) return false;
-
-  // OBV slope — is it rising?
-  const obvFirst = obvSeries[0];
-  const obvLast = obvSeries[obvSeries.length - 1];
-  const obvRising = obvLast > obvFirst;
-
-  // Price slope — is it flat?
-  const priceFirst = recent[0].c;
-  const priceLast = recent[recent.length - 1].c;
-  const priceChangePct = Math.abs((priceLast - priceFirst) / priceFirst * 100);
-  const priceFlat = priceChangePct < 0.5;
-
-  return obvRising && priceFlat;
+  const obvRising = obvSeries[obvSeries.length - 1] > obvSeries[0];
+  const priceChangePct = Math.abs((recent[recent.length - 1].c - recent[0].c) / recent[0].c * 100);
+  return obvRising && priceChangePct < 0.5;
 }
 
 function isRvolAccelerating(rvolHistory) {
@@ -115,7 +106,16 @@ function isRvolAccelerating(rvolHistory) {
   const recent = rvolHistory.slice(-RVOL_WINDOW);
   const latest = recent[recent.length - 1];
   const avg = recent.slice(0, -1).reduce((s, v) => s + v, 0) / (recent.length - 1);
-  return latest > avg * 1.1; // latest RVOL is 10%+ above recent average
+  return latest > avg * 1.1;
+}
+
+function getFloatRotationStage(rotation) {
+  if (rotation === null) return null;
+  if (rotation < 0.3) return null;           // too early — no signal
+  if (rotation < 0.5) return 'early';        // 0.3-0.5x — interest building
+  if (rotation < 1.0) return 'building';     // 0.5-1.0x — strong accumulation
+  if (rotation < 2.0) return 'full';         // 1.0-2.0x — full rotation
+  return 'exhaustion';                        // >2.0x — potential distribution
 }
 
 async function fetchIntradayBars(symbol) {
@@ -161,6 +161,22 @@ async function initAvgVolumes() {
     await new Promise(r => setTimeout(r, 200));
   }
   console.log(`Initialised ${Object.keys(avgVolumes).length} symbols.`);
+}
+
+async function initFloats() {
+  console.log('Fetching float data from Finnhub...');
+  let loaded = 0;
+  for (const symbol of UNIVERSE) {
+    try {
+      const float = await getFloat(symbol);
+      if (float) {
+        floatShares[symbol] = float;
+        loaded++;
+      }
+    } catch {}
+    await new Promise(r => setTimeout(r, 250)); // Finnhub rate limit
+  }
+  console.log(`Float data loaded for ${loaded} symbols.`);
 }
 
 async function initVWAP() {
@@ -242,23 +258,26 @@ async function evaluate(symbol, snap) {
   // Update RVOL history
   const avgVol = avgVolumes[symbol];
   const rvol = avgVol ? vol / avgVol : null;
-  if (rvol) state[symbol].rvolHistory.push(rvol);
-  if (state[symbol].rvolHistory.length > RVOL_WINDOW) {
-    state[symbol].rvolHistory.shift();
+  if (rvol) {
+    state[symbol].rvolHistory.push(rvol);
+    if (state[symbol].rvolHistory.length > RVOL_WINDOW) state[symbol].rvolHistory.shift();
   }
+
+  // Float rotation
+  const float = floatShares[symbol];
+  const rotation = float ? vol / float : null;
+  const rotationStage = getFloatRotationStage(rotation);
 
   const vwap = state[symbol].vwap;
   const atr = state[symbol].atr;
   const rvolAccelerating = isRvolAccelerating(state[symbol].rvolHistory);
   const obvDivergence = state[symbol].obvDivergence || false;
 
-  // Compute signals
   const changePct = ((price - prevClose) / prevClose) * 100;
   const proximityPct = ((price - state[symbol].sessionHigh) / state[symbol].sessionHigh) * 100;
   const aboveVWAP = vwap ? price > vwap : null;
   const atrExtension = atr ? (price - prevClose) / atr : null;
 
-  // Gap boost
   const isGapStock = gapSymbols.has(symbol);
   const minChange = isGapStock ? 2.0 : MIN_CHANGE;
   const minRvol = isGapStock ? 1.2 : MIN_RVOL;
@@ -269,22 +288,28 @@ async function evaluate(symbol, snap) {
   const passVWAP = aboveVWAP !== false;
   const overExtended = atrExtension ? atrExtension > 2.5 : false;
 
-  if (!passChange || !passProximity || !passRvol || !passVWAP || overExtended) return;
+  // Block exhaustion stage
+  const isExhausted = rotationStage === 'exhaustion' && !rvolAccelerating;
+
+  if (!passChange || !passProximity || !passRvol || !passVWAP || overExtended || isExhausted) return;
 
   alertedToday.add(symbol);
 
-  // Build signal tags
+  // Build tags
   const tags = [];
   if (isGapStock) tags.push('🌅 Gap & Go');
   if (rvolAccelerating) tags.push('⚡ RVOL Accelerating');
   if (obvDivergence) tags.push('📈 OBV Divergence');
-  const tagLine = tags.length > 0 ? tags.join(' | ') : '';
+  if (rotationStage === 'building') tags.push('🔄 Float Rotating');
+  if (rotationStage === 'full') tags.push('🔥 Full Float Rotation');
+  const tagLine = tags.join(' | ');
 
   const vwapStr = vwap ? `$${vwap.toFixed(2)}` : 'n/a';
   const atrStr = atr ? `$${atr.toFixed(2)}` : 'n/a';
   const rvolStr = rvol ? `${rvol.toFixed(2)}x${rvolAccelerating ? ' ↑' : ''}` : 'n/a';
+  const rotationStr = rotation ? `${rotation.toFixed(2)}x` : 'n/a';
 
-  console.log(`ALERT: ${symbol} | Change: ${changePct.toFixed(2)}% | Proximity: ${proximityPct.toFixed(2)}% | RVOL: ${rvolStr} | VWAP: ${vwapStr} | OBV div: ${obvDivergence}`);
+  console.log(`ALERT: ${symbol} | Change: ${changePct.toFixed(2)}% | RVOL: ${rvolStr} | Rotation: ${rotationStr} | Stage: ${rotationStage}`);
 
   let newsLine = 'No recent news';
   try {
@@ -306,6 +331,7 @@ async function evaluate(symbol, snap) {
     `Price: $${price.toFixed(2)} as of ${timeET} ET\n` +
     `Change: +${changePct.toFixed(2)}% | Proximity: ${proximityPct.toFixed(2)}%\n` +
     `RVOL: ${rvolStr} | VWAP: ${vwapStr} | ATR: ${atrStr}\n` +
+    `Float Rotation: ${rotationStr}${rotationStage ? ' — ' + rotationStage : ''}\n` +
     `Entry: $${entry} | Stop: $${stopPrice}\n` +
     `News: ${newsLine}`;
 
@@ -336,6 +362,7 @@ async function poll() {
 async function run() {
   console.log(`Pipeline started at ${new Date().toISOString()}`);
   await initAvgVolumes();
+  await initFloats();
   await initVWAP();
   loadGapWatchlist();
 
