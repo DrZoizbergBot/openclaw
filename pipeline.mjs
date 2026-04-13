@@ -18,7 +18,7 @@ const OBV_WINDOW = 5;
 const SQUEEZE_PERIOD = 20;
 
 const alertedToday = new Set();
-const pullbackWatch = {};  // symbols in pullback watch mode
+const pullbackWatch = {};
 const state = {};
 const avgVolumes = {};
 const floatShares = {};
@@ -54,14 +54,10 @@ function resetDailyState() {
     const atr = state[symbol].atr;
     const dailySqueeze = state[symbol].dailySqueeze;
     state[symbol] = {
-      atr,
-      dailySqueeze,
-      rvolHistory: [],
-      intradayBars: [],
-      sessionHigh: null,
-      vwap: null,
-      obvDivergence: false,
-      intradaySqueeze: false,
+      atr, dailySqueeze,
+      rvolHistory: [], intradayBars: [],
+      sessionHigh: null, vwap: null,
+      obvDivergence: false, intradaySqueeze: false,
     };
   }
   alertedToday.clear();
@@ -74,18 +70,28 @@ function computeEMA(values, period) {
   if (values.length < period) return null;
   const k = 2 / (period + 1);
   let ema = values.slice(0, period).reduce((s, v) => s + v, 0) / period;
-  for (let i = period; i < values.length; i++) {
-    ema = values[i] * k + ema * (1 - k);
-  }
+  for (let i = period; i < values.length; i++) ema = values[i] * k + ema * (1 - k);
   return ema;
 }
 
+function computeRSI(closes, period = 2) {
+  if (closes.length < period + 1) return null;
+  const recent = closes.slice(-(period + 1));
+  let gains = 0, losses = 0;
+  for (let i = 1; i < recent.length; i++) {
+    const diff = recent[i] - recent[i - 1];
+    if (diff > 0) gains += diff;
+    else losses -= diff;
+  }
+  if (losses === 0) return 100;
+  const rs = gains / losses;
+  return 100 - (100 / (1 + rs));
+}
+
 function computeVWAP(bars) {
-  let cumTPV = 0;
-  let cumVol = 0;
+  let cumTPV = 0, cumVol = 0;
   for (const bar of bars) {
-    const typicalPrice = (bar.h + bar.l + bar.c) / 3;
-    cumTPV += typicalPrice * bar.v;
+    cumTPV += ((bar.h + bar.l + bar.c) / 3) * bar.v;
     cumVol += bar.v;
   }
   return cumVol > 0 ? cumTPV / cumVol : null;
@@ -93,39 +99,37 @@ function computeVWAP(bars) {
 
 function computeATR(bars) {
   if (bars.length < 2) return null;
-  const trueRanges = [];
+  const trs = [];
   for (let i = 1; i < bars.length; i++) {
-    const tr = Math.max(
+    trs.push(Math.max(
       bars[i].h - bars[i].l,
       Math.abs(bars[i].h - bars[i - 1].c),
       Math.abs(bars[i].l - bars[i - 1].c)
-    );
-    trueRanges.push(tr);
+    ));
   }
-  const period = Math.min(ATR_PERIOD, trueRanges.length);
-  const recent = trueRanges.slice(-period);
-  return recent.reduce((sum, tr) => sum + tr, 0) / recent.length;
+  const period = Math.min(ATR_PERIOD, trs.length);
+  return trs.slice(-period).reduce((s, v) => s + v, 0) / period;
 }
 
 function computeOBV(bars) {
   let obv = 0;
-  const obvSeries = [];
+  const series = [];
   for (let i = 1; i < bars.length; i++) {
     if (bars[i].c > bars[i - 1].c) obv += bars[i].v;
     else if (bars[i].c < bars[i - 1].c) obv -= bars[i].v;
-    obvSeries.push(obv);
+    series.push(obv);
   }
-  return obvSeries;
+  return series;
 }
 
 function detectOBVDivergence(bars) {
   if (bars.length < OBV_WINDOW + 1) return false;
   const recent = bars.slice(-OBV_WINDOW - 1);
-  const obvSeries = computeOBV(recent);
-  if (obvSeries.length < OBV_WINDOW) return false;
-  const obvRising = obvSeries[obvSeries.length - 1] > obvSeries[0];
-  const priceChangePct = Math.abs((recent[recent.length - 1].c - recent[0].c) / recent[0].c * 100);
-  return obvRising && priceChangePct < 0.5;
+  const obv = computeOBV(recent);
+  if (obv.length < OBV_WINDOW) return false;
+  const obvRising = obv[obv.length - 1] > obv[0];
+  const priceFlat = Math.abs((recent[recent.length - 1].c - recent[0].c) / recent[0].c * 100) < 0.5;
+  return obvRising && priceFlat;
 }
 
 function isRvolAccelerating(rvolHistory) {
@@ -137,8 +141,7 @@ function isRvolAccelerating(rvolHistory) {
 }
 
 function getFloatRotationStage(rotation) {
-  if (rotation === null) return null;
-  if (rotation < 0.3) return null;
+  if (!rotation || rotation < 0.3) return null;
   if (rotation < 0.5) return 'early';
   if (rotation < 1.0) return 'building';
   if (rotation < 2.0) return 'full';
@@ -149,11 +152,8 @@ function detectSqueeze(bars) {
   if (bars.length < SQUEEZE_PERIOD) return { squeeze: false, bullish: false };
   const recent = bars.slice(-SQUEEZE_PERIOD);
   const closes = recent.map(b => b.c);
-  const highs = recent.map(b => b.h);
-  const lows = recent.map(b => b.l);
   const sma = closes.reduce((s, c) => s + c, 0) / closes.length;
-  const variance = closes.reduce((s, c) => s + Math.pow(c - sma, 2), 0) / closes.length;
-  const stdDev = Math.sqrt(variance);
+  const stdDev = Math.sqrt(closes.reduce((s, c) => s + Math.pow(c - sma, 2), 0) / closes.length);
   const bbUpper = sma + 2 * stdDev;
   const bbLower = sma - 2 * stdDev;
   let ema = closes[0];
@@ -161,78 +161,119 @@ function detectSqueeze(bars) {
   for (const c of closes) ema = c * k + ema * (1 - k);
   const atr = computeATR(recent);
   if (!atr) return { squeeze: false, bullish: false };
-  const kcUpper = ema + 1.5 * atr;
-  const kcLower = ema - 1.5 * atr;
-  const squeeze = bbUpper < kcUpper && bbLower > kcLower;
-  const highestHigh = Math.max(...highs);
-  const lowestLow = Math.min(...lows);
-  const midpoint = (highestHigh + lowestLow) / 2;
-  const momentum = closes[closes.length - 1] - midpoint;
-  return { squeeze, bullish: momentum > 0 };
+  const squeeze = bbUpper < ema + 1.5 * atr && bbLower > ema - 1.5 * atr;
+  const highs = recent.map(b => b.h);
+  const lows = recent.map(b => b.l);
+  const midpoint = (Math.max(...highs) + Math.min(...lows)) / 2;
+  return { squeeze, bullish: closes[closes.length - 1] > midpoint };
 }
 
-function checkPullbackEntry(symbol, price, vol) {
+function checkEntryPatterns(symbol, price, vol) {
   const pw = pullbackWatch[symbol];
   if (!pw) return;
-  if (pw.pullbackTaken) return; // only first pullback
 
   const bars = state[symbol]?.intradayBars;
   if (!bars || bars.length < 20) return;
 
   const closes = bars.map(b => b.c);
   const volumes = bars.map(b => b.v);
-  const ema9 = computeEMA(closes, 9);
-  const ema20 = computeEMA(closes, 20);
+  const vwap = state[symbol].vwap;
+  const atr = state[symbol].atr;
 
-  if (!ema9 || !ema20) return;
+  // --- Bone Zone check (Step 10) ---
+  if (!pw.boneZoneTaken) {
+    const ema9 = computeEMA(closes, 9);
+    const ema20 = computeEMA(closes, 20);
 
-  const prevClose = closes[closes.length - 2];
-  const prevVol = volumes[volumes.length - 2];
-  const currClose = closes[closes.length - 1];
-  const currVol = volumes[volumes.length - 1];
+    if (ema9 && ema20) {
+      const currClose = closes[closes.length - 1];
+      const currVol = volumes[volumes.length - 1];
 
-  // Phase 1: detect pullback into Bone Zone (between 9 and 20 EMA)
-  if (!pw.inBoneZone) {
-    const inZone = currClose <= ema9 && currClose >= ema20;
-    if (inZone) {
-      pw.inBoneZone = true;
-      pw.pullbackLow = currClose;
-      pw.pullbackVol = currVol;
-      console.log(`${symbol} entered Bone Zone — watching for reclaim`);
+      if (!pw.inBoneZone) {
+        if (currClose <= ema9 && currClose >= ema20) {
+          pw.inBoneZone = true;
+          pw.pullbackLow = currClose;
+          pw.pullbackVol = currVol;
+          console.log(`${symbol} entered Bone Zone`);
+        }
+      } else {
+        if (currClose < pw.pullbackLow) {
+          pw.pullbackLow = currClose;
+          pw.pullbackVol = currVol;
+        }
+        const prevClose = closes[closes.length - 2];
+        const reclaimedEMA9 = prevClose < ema9 && currClose > ema9;
+        const expandingVol = currVol > pw.pullbackVol * 1.2;
+
+        if (reclaimedEMA9 && expandingVol) {
+          pw.boneZoneTaken = true;
+          const stop = Math.min(pw.pullbackLow, ema20).toFixed(2);
+          const entry = (price * 1.005).toFixed(2);
+          const timeET = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' });
+          console.log(`BONE ZONE ENTRY: ${symbol} | Price: ${price} | Stop: ${stop}`);
+          sendTelegram(
+            `🎯 *PULLBACK ENTRY — Bone Zone*\n` +
+            `Ticker: *${symbol}*\n` +
+            `Price: $${price.toFixed(2)} as of ${timeET} ET\n` +
+            `Entry: $${entry} | Stop: $${stop}\n` +
+            `9 EMA: $${ema9.toFixed(2)} | 20 EMA: $${ema20.toFixed(2)}\n` +
+            `Signal: Reclaimed 9 EMA with expanding volume`
+          );
+        }
+      }
     }
-    return;
   }
 
-  // Update pullback low
-  if (currClose < pw.pullbackLow) {
-    pw.pullbackLow = currClose;
-    pw.pullbackVol = currVol;
-  }
+  // --- VWAP Reclaim check (Step 11) ---
+  if (!pw.vwapReclaimTaken && vwap) {
+    const currClose = closes[closes.length - 1];
+    const currVol = volumes[volumes.length - 1];
+    const prevClose = closes[closes.length - 2];
+    const prevVol = volumes[volumes.length - 2];
+    const rsi = computeRSI(closes);
 
-  // Phase 2: detect reclaim of 9 EMA with expanding volume
-  const reclaimedEMA9 = prevClose < ema9 && currClose > ema9;
-  const expandingVol = currVol > pw.pullbackVol * 1.2;
+    const nearVWAP = Math.abs((currClose - vwap) / vwap * 100) < 0.5;
+    const decliningVol = currVol < prevVol;
 
-  if (reclaimedEMA9 && expandingVol) {
-    pw.pullbackTaken = true;
+    if (!pw.atVWAP) {
+      if (nearVWAP && decliningVol && currClose <= vwap) {
+        pw.atVWAP = true;
+        pw.vwapPullbackVol = currVol;
+        pw.vwapPullbackRSI = rsi;
+        console.log(`${symbol} pulling back to VWAP`);
+      }
+    } else {
+      const reclaimedVWAP = prevClose <= vwap && currClose > vwap;
+      const expandingVol = currVol > (pw.vwapPullbackVol || prevVol) * 1.5;
+      const rsiConfirm = pw.vwapPullbackRSI !== null
+        ? pw.vwapPullbackRSI < 10 && (rsi !== null && rsi > 10)
+        : true;
 
-    const atr = state[symbol]?.atr;
-    const stop = Math.min(pw.pullbackLow, ema20);
-    const entry = (price * 1.005).toFixed(2);
-    const stopPrice = stop.toFixed(2);
-    const timeET = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' });
+      if (reclaimedVWAP && expandingVol) {
+        pw.vwapReclaimTaken = true;
+        const stop = atr
+          ? (vwap - atr).toFixed(2)
+          : (vwap * 0.99).toFixed(2);
+        const entry = (price * 1.005).toFixed(2);
+        const timeET = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' });
+        const rsiTag = rsiConfirm ? ' | RSI(2) confirmed' : '';
+        console.log(`VWAP RECLAIM ENTRY: ${symbol} | Price: ${price} | VWAP: ${vwap.toFixed(2)} | Stop: ${stop}`);
+        sendTelegram(
+          `🎯 *VWAP RECLAIM ENTRY*${rsiTag}\n` +
+          `Ticker: *${symbol}*\n` +
+          `Price: $${price.toFixed(2)} as of ${timeET} ET\n` +
+          `Entry: $${entry} | Stop: $${stop}\n` +
+          `VWAP: $${vwap.toFixed(2)} | ATR: ${atr ? '$' + atr.toFixed(2) : 'n/a'}\n` +
+          `Signal: Reclaimed VWAP with volume surge`
+        );
+      }
 
-    console.log(`PULLBACK ENTRY: ${symbol} | Price: ${price} | Stop: ${stopPrice}`);
-
-    const msg =
-      `🎯 *PULLBACK ENTRY — First Pullback*\n` +
-      `Ticker: *${symbol}*\n` +
-      `Price: $${price.toFixed(2)} as of ${timeET} ET\n` +
-      `Entry: $${entry} | Stop: $${stopPrice}\n` +
-      `Bone Zone: 9 EMA $${ema9.toFixed(2)} / 20 EMA $${ema20.toFixed(2)}\n` +
-      `Signal: Reclaimed 9 EMA with expanding volume`;
-
-    sendTelegram(msg);
+      // Reset if price moved too far from VWAP without reclaiming
+      if (currClose < vwap * 0.98) {
+        pw.atVWAP = false;
+        pw.vwapPullbackVol = null;
+      }
+    }
   }
 }
 
@@ -245,9 +286,7 @@ async function fetchIntradayBars(symbol) {
     );
     const data = await res.json();
     return data.bars || [];
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
 async function fetchDailyBars(symbol) {
@@ -260,9 +299,7 @@ async function fetchDailyBars(symbol) {
     );
     const data = await res.json();
     return data.bars || [];
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
 async function initAvgVolumes() {
@@ -271,9 +308,8 @@ async function initAvgVolumes() {
     const bars = await fetchDailyBars(symbol);
     if (bars.length > 0) {
       avgVolumes[symbol] = bars.reduce((sum, b) => sum + b.v, 0) / bars.length;
-      const atr = computeATR(bars);
       if (!state[symbol]) state[symbol] = {};
-      state[symbol].atr = atr;
+      state[symbol].atr = computeATR(bars);
       state[symbol].rvolHistory = state[symbol].rvolHistory || [];
       state[symbol].intradayBars = state[symbol].intradayBars || [];
       const { squeeze, bullish } = detectSqueeze(bars);
@@ -335,18 +371,16 @@ async function fetchSnapshots(symbols) {
       `https://data.alpaca.markets/v2/stocks/snapshots?symbols=${batch.join(',')}&feed=iex`,
       { headers: { 'APCA-API-KEY-ID': KEY, 'APCA-API-SECRET-KEY': SECRET } }
     );
-    const data = await res.json();
-    Object.assign(snapshots, data);
+    Object.assign(snapshots, await res.json());
   }
   return snapshots;
 }
 
 async function evaluate(symbol, snap) {
   if (alertedToday.has(symbol)) {
-    // Still check for pullback entry even after breakout alert
     const price = snap.dailyBar?.c || snap.minuteBar?.c;
     const vol = snap.dailyBar?.v || 0;
-    if (price) checkPullbackEntry(symbol, price, vol);
+    if (price) checkEntryPatterns(symbol, price, vol);
     return;
   }
 
@@ -356,28 +390,23 @@ async function evaluate(symbol, snap) {
   const low = snap.dailyBar?.l || price;
   const vol = snap.dailyBar?.v || 0;
 
-  if (!prevClose || !price) return;
-  if (price < MIN_PRICE) return;
+  if (!prevClose || !price || price < MIN_PRICE) return;
 
   const barDate = snap.dailyBar?.t;
   if (barDate) {
     const barDay = new Date(barDate).toDateString();
-    const today = new Date().toDateString();
-    if (barDay !== today) return;
+    if (barDay !== new Date().toDateString()) return;
   }
 
   if (!state[symbol]) state[symbol] = {};
   if (!state[symbol].rvolHistory) state[symbol].rvolHistory = [];
   if (!state[symbol].intradayBars) state[symbol].intradayBars = [];
 
-  if (!state[symbol].sessionHigh || high > state[symbol].sessionHigh) {
-    state[symbol].sessionHigh = high;
-  }
+  if (!state[symbol].sessionHigh || high > state[symbol].sessionHigh) state[symbol].sessionHigh = high;
 
   state[symbol].intradayBars.push({ h: high, l: low, c: price, v: vol });
   state[symbol].vwap = computeVWAP(state[symbol].intradayBars);
   state[symbol].obvDivergence = detectOBVDivergence(state[symbol].intradayBars);
-
   const { squeeze, bullish } = detectSqueeze(state[symbol].intradayBars);
   state[symbol].intradaySqueeze = squeeze && bullish;
 
@@ -409,24 +438,20 @@ async function evaluate(symbol, snap) {
   const minChange = isGapStock ? 2.0 : MIN_CHANGE;
   const minRvol = isGapStock ? 1.2 : MIN_RVOL;
 
-  const passChange = changePct >= minChange;
-  const passProximity = proximityPct >= MIN_PROXIMITY;
-  const passRvol = rvol ? rvol >= minRvol : true;
-  const passVWAP = aboveVWAP !== false;
-  const overExtended = atrExtension ? atrExtension > 2.5 : false;
-  const isExhausted = rotationStage === 'exhaustion' && !rvolAccelerating;
-
-  if (!passChange || !passProximity || !passRvol || !passVWAP || overExtended || isExhausted) return;
+  if (
+    ((price - prevClose) / prevClose * 100) < minChange ||
+    proximityPct < MIN_PROXIMITY ||
+    (rvol && rvol < minRvol) ||
+    aboveVWAP === false ||
+    (atrExtension && atrExtension > 2.5) ||
+    (rotationStage === 'exhaustion' && !rvolAccelerating)
+  ) return;
 
   alertedToday.add(symbol);
-
-  // Start watching for pullback entry
   pullbackWatch[symbol] = {
     alertPrice: price,
-    inBoneZone: false,
-    pullbackLow: null,
-    pullbackVol: null,
-    pullbackTaken: false,
+    inBoneZone: false, pullbackLow: null, pullbackVol: null, boneZoneTaken: false,
+    atVWAP: false, vwapPullbackVol: null, vwapPullbackRSI: null, vwapReclaimTaken: false,
   };
 
   const tags = [];
@@ -437,12 +462,12 @@ async function evaluate(symbol, snap) {
   if (rotationStage === 'full') tags.push('🔥 Full Float Rotation');
   if (intradaySqueeze) tags.push('💥 Intraday Squeeze');
   else if (dailySqueeze) tags.push('💥 Daily Squeeze');
-  const tagLine = tags.join(' | ');
 
   const vwapStr = vwap ? `$${vwap.toFixed(2)}` : 'n/a';
   const atrStr = atr ? `$${atr.toFixed(2)}` : 'n/a';
   const rvolStr = rvol ? `${rvol.toFixed(2)}x${rvolAccelerating ? ' ↑' : ''}` : 'n/a';
   const rotationStr = rotation ? `${rotation.toFixed(2)}x` : 'n/a';
+  const tagLine = tags.join(' | ');
 
   console.log(`ALERT: ${symbol} | Change: ${changePct.toFixed(2)}% | RVOL: ${rvolStr} | ATR: ${atrStr}`);
 
@@ -453,13 +478,10 @@ async function evaluate(symbol, snap) {
   } catch {}
 
   const entry = (price * 1.005).toFixed(2);
-  const stopPrice = atr
-    ? (price - atr * 1.5).toFixed(2)
-    : (price * 0.955).toFixed(2);
-
+  const stopPrice = atr ? (price - atr * 1.5).toFixed(2) : (price * 0.955).toFixed(2);
   const timeET = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' });
 
-  const msg =
+  await sendTelegram(
     `🚀 *BREAKOUT ALERT*\n` +
     (tagLine ? `${tagLine}\n` : '') +
     `Ticker: *${symbol}*\n` +
@@ -468,22 +490,18 @@ async function evaluate(symbol, snap) {
     `RVOL: ${rvolStr} | VWAP: ${vwapStr} | ATR: ${atrStr}\n` +
     `Float Rotation: ${rotationStr}${rotationStage ? ' — ' + rotationStage : ''}\n` +
     `Entry: $${entry} | Stop: $${stopPrice}\n` +
-    `News: ${newsLine}`;
-
-  await sendTelegram(msg);
+    `News: ${newsLine}`
+  );
 }
 
 async function poll() {
   loadGapWatchlist();
-
   if (!isMarketHours()) {
     console.log(`Outside market hours — skipping poll at ${new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' })} ET`);
     return;
   }
-
   const timeET = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' });
   console.log(`Polling at ${timeET} ET...`);
-
   try {
     const snapshots = await fetchSnapshots(UNIVERSE);
     for (const [symbol, snap] of Object.entries(snapshots)) {
