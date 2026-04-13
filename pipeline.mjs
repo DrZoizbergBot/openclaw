@@ -45,7 +45,7 @@ function computeConfidenceScore({
   else if (absChange < 5) changeScore = 50;
   else if (absChange < 10) changeScore = 100;
   else if (absChange < 20) changeScore = 85;
-  else changeScore = 40;
+  else changeScore = 20;
 
   let rvolScore = 0;
   if (rvol) {
@@ -55,16 +55,21 @@ function computeConfidenceScore({
     else rvolScore = 100;
   }
 
+  const rotationScore =
+    rotationStage === 'full' ? 100 :
+    rotationStage === 'building' ? 75 :
+    rotationStage === 'early' ? 50 : 0;
+
   return Math.round((
     proximityScore * 0.20 +
     changeScore * 0.15 +
     rvolScore * 0.15 +
     (rvolAccelerating ? 100 : 0) * 0.10 +
     (aboveVWAP ? 100 : 0) * 0.10 +
-    (obvDivergence ? 100 : 50) * 0.08 +
+    (obvDivergence ? 100 : 0) * 0.08 +
     (intradaySqueeze ? 100 : dailySqueeze ? 70 : 0) * 0.07 +
-    (hasNews ? 100 : 30) * 0.07 +
-    (rotationStage === 'full' ? 100 : rotationStage === 'building' ? 70 : rotationStage === 'early' ? 40 : 20) * 0.05 +
+    (hasNews ? 100 : 0) * 0.07 +
+    rotationScore * 0.05 +
     (isGapStock ? 100 : 0) * 0.03
   ) * 10) / 10;
 }
