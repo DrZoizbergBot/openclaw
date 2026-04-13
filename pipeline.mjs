@@ -10,6 +10,7 @@ const SECRET = process.env.ALPACA_SECRET;
 const MIN_RVOL = 1.5;
 const MIN_PROXIMITY = -3.0;
 const MIN_CHANGE = 3.0;
+const MIN_PRICE = 5.0;
 const POLL_INTERVAL_MS = 60 * 1000;
 const ATR_PERIOD = 14;
 const RVOL_WINDOW = 5;
@@ -48,10 +49,24 @@ function isMarketHours() {
 }
 
 function resetDailyState() {
+  // Preserve ATR and float — only reset intraday data
+  for (const symbol of Object.keys(state)) {
+    const atr = state[symbol].atr;
+    const dailySqueeze = state[symbol].dailySqueeze;
+    state[symbol] = {
+      atr,
+      dailySqueeze,
+      rvolHistory: [],
+      intradayBars: [],
+      sessionHigh: null,
+      vwap: null,
+      obvDivergence: false,
+      intradaySqueeze: false,
+    };
+  }
   alertedToday.clear();
-  Object.keys(state).forEach(k => delete state[k]);
   gapSymbols.clear();
-  console.log('Daily state reset.');
+  console.log('Daily state reset — ATR and float preserved.');
 }
 
 function computeVWAP(bars) {
@@ -121,41 +136,28 @@ function getFloatRotationStage(rotation) {
 
 function detectSqueeze(bars) {
   if (bars.length < SQUEEZE_PERIOD) return { squeeze: false, bullish: false };
-
   const recent = bars.slice(-SQUEEZE_PERIOD);
   const closes = recent.map(b => b.c);
   const highs = recent.map(b => b.h);
   const lows = recent.map(b => b.l);
-
-  // SMA and standard deviation for Bollinger Bands
   const sma = closes.reduce((s, c) => s + c, 0) / closes.length;
   const variance = closes.reduce((s, c) => s + Math.pow(c - sma, 2), 0) / closes.length;
   const stdDev = Math.sqrt(variance);
   const bbUpper = sma + 2 * stdDev;
   const bbLower = sma - 2 * stdDev;
-
-  // EMA for Keltner Channels
   let ema = closes[0];
   const k = 2 / (SQUEEZE_PERIOD + 1);
   for (const c of closes) ema = c * k + ema * (1 - k);
-
-  // ATR for Keltner
   const atr = computeATR(recent);
   if (!atr) return { squeeze: false, bullish: false };
   const kcUpper = ema + 1.5 * atr;
   const kcLower = ema - 1.5 * atr;
-
-  // Squeeze: BB inside KC
   const squeeze = bbUpper < kcUpper && bbLower > kcLower;
-
-  // Momentum direction
   const highestHigh = Math.max(...highs);
   const lowestLow = Math.min(...lows);
   const midpoint = (highestHigh + lowestLow) / 2;
   const momentum = closes[closes.length - 1] - midpoint;
-  const bullish = momentum > 0;
-
-  return { squeeze, bullish };
+  return { squeeze, bullish: momentum > 0 };
 }
 
 async function fetchIntradayBars(symbol) {
@@ -195,9 +197,9 @@ async function initAvgVolumes() {
       avgVolumes[symbol] = bars.reduce((sum, b) => sum + b.v, 0) / bars.length;
       const atr = computeATR(bars);
       if (!state[symbol]) state[symbol] = {};
-      state[symbol].atr = atr;
-      state[symbol].rvolHistory = [];
-      // Seed squeeze detection with daily bars
+      state[symbol].atr = atr; // set once from daily bars, never overwritten
+      state[symbol].rvolHistory = state[symbol].rvolHistory || [];
+      state[symbol].intradayBars = state[symbol].intradayBars || [];
       const { squeeze, bullish } = detectSqueeze(bars);
       state[symbol].dailySqueeze = squeeze && bullish;
     }
@@ -233,6 +235,7 @@ async function initVWAP() {
       state[symbol].obvDivergence = detectOBVDivergence(bars);
       const { squeeze, bullish } = detectSqueeze(bars);
       state[symbol].intradaySqueeze = squeeze && bullish;
+      // ATR is NOT touched here — preserved from daily bars
       seeded++;
     }
     await new Promise(r => setTimeout(r, 150));
@@ -274,6 +277,10 @@ async function evaluate(symbol, snap) {
 
   if (!prevClose || !price) return;
 
+  // Minimum price filter
+  if (price < MIN_PRICE) return;
+
+  // Stale data check
   const barDate = snap.dailyBar?.t;
   if (barDate) {
     const barDay = new Date(barDate).toDateString();
@@ -281,14 +288,16 @@ async function evaluate(symbol, snap) {
     if (barDay !== today) return;
   }
 
-  if (!state[symbol]) state[symbol] = { rvolHistory: [] };
+  if (!state[symbol]) state[symbol] = {};
   if (!state[symbol].rvolHistory) state[symbol].rvolHistory = [];
+  if (!state[symbol].intradayBars) state[symbol].intradayBars = [];
 
+  // Update session high
   if (!state[symbol].sessionHigh || high > state[symbol].sessionHigh) {
     state[symbol].sessionHigh = high;
   }
 
-  if (!state[symbol].intradayBars) state[symbol].intradayBars = [];
+  // Update intraday bars for VWAP and OBV — use typical price bar format
   state[symbol].intradayBars.push({ h: high, l: low, c: price, v: vol });
   state[symbol].vwap = computeVWAP(state[symbol].intradayBars);
   state[symbol].obvDivergence = detectOBVDivergence(state[symbol].intradayBars);
@@ -297,6 +306,7 @@ async function evaluate(symbol, snap) {
   const { squeeze, bullish } = detectSqueeze(state[symbol].intradayBars);
   state[symbol].intradaySqueeze = squeeze && bullish;
 
+  // Update RVOL history
   const avgVol = avgVolumes[symbol];
   const rvol = avgVol ? vol / avgVol : null;
   if (rvol) {
@@ -304,12 +314,15 @@ async function evaluate(symbol, snap) {
     if (state[symbol].rvolHistory.length > RVOL_WINDOW) state[symbol].rvolHistory.shift();
   }
 
+  // Float rotation — use cumulative intraday volume
   const float = floatShares[symbol];
-  const rotation = float ? vol / float : null;
+  const cumVol = state[symbol].intradayBars.reduce((sum, b) => sum + b.v, 0);
+  const rotation = float ? cumVol / float : null;
   const rotationStage = getFloatRotationStage(rotation);
 
-  const vwap = state[symbol].vwap;
+  // Read ATR — set once at init, never overwritten here
   const atr = state[symbol].atr;
+  const vwap = state[symbol].vwap;
   const rvolAccelerating = isRvolAccelerating(state[symbol].rvolHistory);
   const obvDivergence = state[symbol].obvDivergence || false;
   const dailySqueeze = state[symbol].dailySqueeze || false;
@@ -350,7 +363,7 @@ async function evaluate(symbol, snap) {
   const rvolStr = rvol ? `${rvol.toFixed(2)}x${rvolAccelerating ? ' ↑' : ''}` : 'n/a';
   const rotationStr = rotation ? `${rotation.toFixed(2)}x` : 'n/a';
 
-  console.log(`ALERT: ${symbol} | Change: ${changePct.toFixed(2)}% | RVOL: ${rvolStr} | Squeeze: ${intradaySqueeze || dailySqueeze}`);
+  console.log(`ALERT: ${symbol} | Change: ${changePct.toFixed(2)}% | RVOL: ${rvolStr} | ATR: ${atrStr} | Rotation: ${rotationStr}`);
 
   let newsLine = 'No recent news';
   try {
