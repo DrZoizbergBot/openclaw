@@ -33,14 +33,12 @@ function computeConfidenceScore({
   aboveVWAP, obvDivergence, intradaySqueeze, dailySqueeze,
   hasNews, rotationStage, isGapStock
 }) {
-  // Proximity (20%)
   let proximityScore = 0;
   if (proximityPct >= 0) proximityScore = 100;
   else if (proximityPct >= -1) proximityScore = 90;
   else if (proximityPct >= -2) proximityScore = 70;
   else if (proximityPct >= -3) proximityScore = 40;
 
-  // % change (15%)
   let changeScore = 0;
   const absChange = Math.abs(changePct);
   if (absChange < 2) changeScore = 20;
@@ -49,7 +47,6 @@ function computeConfidenceScore({
   else if (absChange < 20) changeScore = 85;
   else changeScore = 40;
 
-  // RVOL (15%)
   let rvolScore = 0;
   if (rvol) {
     if (rvol < 1.5) rvolScore = 0;
@@ -58,45 +55,76 @@ function computeConfidenceScore({
     else rvolScore = 100;
   }
 
-  // RVOL accelerating (10%)
-  const rvolAccelScore = rvolAccelerating ? 100 : 0;
-
-  // Above VWAP (10%)
-  const vwapScore = aboveVWAP ? 100 : 0;
-
-  // OBV divergence (8%)
-  const obvScore = obvDivergence ? 100 : 50;
-
-  // Squeeze (7%)
-  let squeezeScore = 0;
-  if (intradaySqueeze) squeezeScore = 100;
-  else if (dailySqueeze) squeezeScore = 70;
-
-  // News catalyst (7%)
-  const newsScore = hasNews ? 100 : 30;
-
-  // Float rotation (5%)
-  let rotationScore = 20;
-  if (rotationStage === 'full') rotationScore = 100;
-  else if (rotationStage === 'building') rotationScore = 70;
-  else if (rotationStage === 'early') rotationScore = 40;
-
-  // Gap stock (3%)
-  const gapScore = isGapStock ? 100 : 0;
-
-  const score =
+  return Math.round((
     proximityScore * 0.20 +
     changeScore * 0.15 +
     rvolScore * 0.15 +
-    rvolAccelScore * 0.10 +
-    vwapScore * 0.10 +
-    obvScore * 0.08 +
-    squeezeScore * 0.07 +
-    newsScore * 0.07 +
-    rotationScore * 0.05 +
-    gapScore * 0.03;
+    (rvolAccelerating ? 100 : 0) * 0.10 +
+    (aboveVWAP ? 100 : 0) * 0.10 +
+    (obvDivergence ? 100 : 50) * 0.08 +
+    (intradaySqueeze ? 100 : dailySqueeze ? 70 : 0) * 0.07 +
+    (hasNews ? 100 : 30) * 0.07 +
+    (rotationStage === 'full' ? 100 : rotationStage === 'building' ? 70 : rotationStage === 'early' ? 40 : 20) * 0.05 +
+    (isGapStock ? 100 : 0) * 0.03
+  ) * 10) / 10;
+}
 
-  return Math.round(score * 10) / 10;
+function computePenalties({
+  price, high, low, open,
+  atrExtension, hasNews,
+  intradayBars, rvol, float,
+  proximityPct
+}) {
+  let penalty = 0;
+  const reasons = [];
+
+  // Topping tail: upper wick > 60% of candle range near session high
+  const range = high - low;
+  if (range > 0) {
+    const upperWick = high - price;
+    const wickRatio = upperWick / range;
+    if (wickRatio > 0.6 && proximityPct >= -2) {
+      penalty += 20;
+      reasons.push('topping tail');
+    }
+  }
+
+  // Declining volume on rising price — last 3 bars
+  if (intradayBars && intradayBars.length >= 3) {
+    const last3 = intradayBars.slice(-3);
+    const risingPrice = last3[2].c > last3[0].c;
+    const decliningVol = last3[2].v < last3[1].v && last3[1].v < last3[0].v;
+    if (risingPrice && decliningVol) {
+      penalty += 15;
+      reasons.push('declining volume on rising price');
+    }
+  }
+
+  // No catalyst
+  if (!hasNews) {
+    penalty += 10;
+    reasons.push('no news catalyst');
+  }
+
+  // Overextension >2.0x ATR
+  if (atrExtension && atrExtension > 2.0) {
+    penalty += 15;
+    reasons.push(`overextended ${atrExtension.toFixed(1)}x ATR`);
+  }
+
+  // Low float trap: float <5M shares with RVOL >3x
+  if (float && float < 5_000_000 && rvol && rvol > 3) {
+    penalty += 12;
+    reasons.push('low float trap');
+  }
+
+  // Fading gap: current price below open
+  if (open && price < open) {
+    penalty += 20;
+    reasons.push('gap fading');
+  }
+
+  return { penalty, reasons };
 }
 
 function confidenceLabel(score) {
@@ -445,6 +473,7 @@ async function evaluate(symbol, snap) {
   const price = snap.dailyBar?.c || snap.minuteBar?.c;
   const high = snap.dailyBar?.h || price;
   const low = snap.dailyBar?.l || price;
+  const open = snap.dailyBar?.o || price;
   const vol = snap.dailyBar?.v || 0;
 
   if (!price || price < MIN_PRICE) return;
@@ -497,7 +526,6 @@ async function evaluate(symbol, snap) {
   const minChange = isGapStock ? 2.0 : MIN_CHANGE;
   const minRvol = isGapStock ? 1.2 : MIN_RVOL;
 
-  // Basic threshold gates — still apply before scoring
   if (
     changePct < minChange ||
     proximityPct < MIN_PROXIMITY ||
@@ -507,30 +535,33 @@ async function evaluate(symbol, snap) {
     (rotationStage === 'exhaustion' && !rvolAccelerating)
   ) return;
 
-  // Fetch news to determine catalyst presence
   let newsLine = 'No recent news';
   let hasNews = false;
   try {
     const news = await getNews(symbol);
-    if (news.length > 0) {
-      newsLine = news[0].headline;
-      hasNews = true;
-    }
+    if (news.length > 0) { newsLine = news[0].headline; hasNews = true; }
   } catch {}
 
-  // Compute confidence score
-  const score = computeConfidenceScore({
-    proximityPct, changePct, rvol,
-    rvolAccelerating, aboveVWAP: aboveVWAP !== false,
-    obvDivergence, intradaySqueeze, dailySqueeze,
-    hasNews, rotationStage, isGapStock
+  // Base confidence score
+  let score = computeConfidenceScore({
+    proximityPct, changePct, rvol, rvolAccelerating,
+    aboveVWAP: aboveVWAP !== false, obvDivergence,
+    intradaySqueeze, dailySqueeze, hasNews, rotationStage, isGapStock
   });
 
-  const label = confidenceLabel(score);
+  // Apply penalties
+  const { penalty, reasons } = computePenalties({
+    price, high, low, open,
+    atrExtension, hasNews,
+    intradayBars: state[symbol].intradayBars,
+    rvol, float, proximityPct
+  });
 
-  // Gate on minimum confidence
-  if (score < MIN_CONFIDENCE) {
-    console.log(`SUPPRESSED: ${symbol} | Score: ${score} | Change: ${changePct.toFixed(2)}% — below threshold`);
+  const finalScore = Math.max(0, Math.round((score - penalty) * 10) / 10);
+  const label = confidenceLabel(finalScore);
+
+  if (finalScore < MIN_CONFIDENCE) {
+    console.log(`SUPPRESSED: ${symbol} | Score: ${score} → ${finalScore} | Penalties: ${reasons.join(', ')}`);
     return;
   }
 
@@ -549,6 +580,7 @@ async function evaluate(symbol, snap) {
   if (rotationStage === 'full') tags.push('🔥 Full Float Rotation');
   if (intradaySqueeze) tags.push('💥 Intraday Squeeze');
   else if (dailySqueeze) tags.push('💥 Daily Squeeze');
+  if (reasons.length > 0) tags.push(`⚠️ ${reasons.join(', ')}`);
 
   const vwapStr = vwap ? `$${vwap.toFixed(2)}` : 'n/a';
   const atrStr = atr ? `$${atr.toFixed(2)}` : 'n/a';
@@ -556,7 +588,7 @@ async function evaluate(symbol, snap) {
   const rotationStr = rotation ? `${rotation.toFixed(2)}x` : 'n/a';
   const tagLine = tags.join(' | ');
 
-  console.log(`ALERT: ${symbol} | Score: ${score}/${label} | Change: ${changePct.toFixed(2)}% | RVOL: ${rvolStr}`);
+  console.log(`ALERT: ${symbol} | Score: ${score} → ${finalScore}/${label} | Penalties: ${reasons.join(', ') || 'none'}`);
 
   const entry = (price * 1.005).toFixed(2);
   const stopPrice = atr ? (price - atr * 1.5).toFixed(2) : (price * 0.955).toFixed(2);
@@ -570,7 +602,7 @@ async function evaluate(symbol, snap) {
     `Change: +${changePct.toFixed(2)}% | Proximity: ${proximityPct.toFixed(2)}%\n` +
     `RVOL: ${rvolStr} | VWAP: ${vwapStr} | ATR: ${atrStr}\n` +
     `Float Rotation: ${rotationStr}${rotationStage ? ' — ' + rotationStage : ''}\n` +
-    `Confidence: ${score}/100 — ${label}\n` +
+    `Confidence: ${finalScore}/100 — ${label}\n` +
     `Entry: $${entry} | Stop: $${stopPrice}\n` +
     `News: ${newsLine}`
   );
