@@ -26,6 +26,7 @@ const orbState = {};
 const state = {};
 const avgVolumes = {};
 const floatShares = {};
+const shortVolRatio = {};
 let gapSymbols = new Set();
 
 function computeConfidenceScore({
@@ -84,7 +85,7 @@ function computePenalties({
   price, high, low, open,
   atrExtension, hasNews,
   intradayBars, rvol, float,
-  proximityPct
+  proximityPct, shortVolRatio
 }) {
   let penalty = 0;
   const reasons = [];
@@ -133,6 +134,12 @@ function computePenalties({
   if (open && price < open) {
     penalty += 20;
     reasons.push('gap fading');
+  }
+
+  // High short volume ratio (>50%) without squeeze — institutional resistance
+  if (shortVolRatio !== null && shortVolRatio > 0.50) {
+    penalty += 10;
+    reasons.push(`high short vol ${(shortVolRatio * 100).toFixed(0)}%`);
   }
 
   return { penalty, reasons };
@@ -565,12 +572,14 @@ async function evaluate(symbol, snap) {
     socialSentiment
   });
 
+  const svr = shortVolRatio[symbol] ?? null;
+
   // Apply penalties
   const { penalty, reasons } = computePenalties({
     price, high, low, open,
     atrExtension, hasNews,
     intradayBars: state[symbol].intradayBars,
-    rvol, float, proximityPct
+    rvol, float, proximityPct, shortVolRatio: svr
   });
 
   const finalScore = Math.max(0, Math.round((score - penalty) * 10) / 10);
@@ -596,6 +605,7 @@ async function evaluate(symbol, snap) {
   if (rotationStage === 'full') tags.push('🔥 Full Float Rotation');
   if (intradaySqueeze) tags.push('💥 Intraday Squeeze');
   else if (dailySqueeze) tags.push('💥 Daily Squeeze');
+  if (svr !== null && svr > 0.60 && (intradaySqueeze || dailySqueeze)) tags.push('🩳 Short Squeeze Setup');
   if (reasons.length > 0) tags.push(`⚠️ ${reasons.join(', ')}`);
 
   const vwapStr = vwap ? `$${vwap.toFixed(2)}` : 'n/a';
@@ -613,6 +623,7 @@ async function evaluate(symbol, snap) {
   const sentimentStr = socialSentiment
     ? `Score: ${socialSentiment.combinedScore > 0 ? '+' : ''}${socialSentiment.combinedScore} | Mentions: ${socialSentiment.totalMentions}`
     : 'n/a';
+  const shortVolStr = svr !== null ? `${(svr * 100).toFixed(0)}%` : 'n/a';
 
   await sendTelegram(
     `🚀 *BREAKOUT ALERT*\n` +
@@ -622,7 +633,7 @@ async function evaluate(symbol, snap) {
     `Change: +${changePct.toFixed(2)}% | Proximity: ${proximityPct.toFixed(2)}%\n` +
     `RVOL: ${rvolStr} | VWAP: ${vwapStr} | ATR: ${atrStr}\n` +
     `Float Rotation: ${rotationStr}${rotationStage ? ' — ' + rotationStage : ''}\n` +
-    `Sentiment: ${sentimentStr}\n` +
+    `Short Vol: ${shortVolStr} | Sentiment: ${sentimentStr}\n` +
     `Confidence: ${finalScore}/100 — ${label}\n` +
     `Entry: $${entry} | Stop: $${stopPrice}\n` +
     `News: ${newsLine}`
@@ -647,10 +658,45 @@ async function poll() {
   }
 }
 
+async function initShortVolume() {
+  try {
+    const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    // Use previous trading day if before 6 PM ET (FINRA posts by 6 PM)
+    const date = new Date(et);
+    if (et.getHours() < 18) date.setDate(date.getDate() - 1);
+    // Skip weekends
+    while (date.getDay() === 0 || date.getDay() === 6) date.setDate(date.getDate() - 1);
+    const dateStr = date.toISOString().split('T')[0].replace(/-/g, '');
+
+    const url = `https://cdn.finra.org/equity/regsho/daily/CNMSshvol${dateStr}.txt`;
+    const res = await fetch(url);
+    if (!res.ok) { console.log(`FINRA short volume: file not available for ${dateStr}`); return; }
+
+    const text = await res.text();
+    const lines = text.split('\n');
+    let loaded = 0;
+    for (const line of lines) {
+      const parts = line.split('|');
+      if (parts.length < 5 || parts[0] === 'Date') continue;
+      const symbol = parts[1];
+      const shortVol = parseInt(parts[2]);
+      const totalVol = parseInt(parts[4]);
+      if (!isNaN(shortVol) && !isNaN(totalVol) && totalVol > 0) {
+        shortVolRatio[symbol] = shortVol / totalVol;
+        loaded++;
+      }
+    }
+    console.log(`FINRA short volume loaded for ${loaded} symbols (${dateStr}).`);
+  } catch (e) {
+    console.log(`FINRA short volume fetch failed: ${e.message}`);
+  }
+}
+
 async function run() {
   console.log(`Pipeline started at ${new Date().toISOString()}`);
   await initAvgVolumes();
   await initFloats();
+  await initShortVolume();
   await initVWAP();
   loadGapWatchlist();
 
