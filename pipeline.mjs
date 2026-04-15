@@ -2,6 +2,13 @@ import { UNIVERSE } from './universe.mjs';
 import { getNews, getFloat, getSocialSentiment } from './finnhub_client.mjs';
 import { readFileSync, existsSync } from 'fs';
 
+const PORTFOLIO_FILE = '/home/davide/openclaw-scripts/portfolio.json';
+
+function readPortfolio() {
+  try { return JSON.parse(readFileSync(PORTFOLIO_FILE, 'utf8')); }
+  catch { return { cash: 100, positions: [] }; }
+}
+
 const TOKEN = process.env.TOKEN;
 const CHAT = process.env.CHAT;
 const KEY = process.env.ALPACA_KEY;
@@ -616,8 +623,42 @@ async function evaluate(symbol, snap) {
 
   console.log(`ALERT: ${symbol} | Score: ${score} → ${finalScore}/${label} | Penalties: ${reasons.join(', ') || 'none'}`);
 
-  const entry = (price * 1.005).toFixed(2);
-  const stopPrice = atr ? (price - atr * 1.5).toFixed(2) : (price * 0.955).toFixed(2);
+  // ATR-based position sizing
+  const portfolio = readPortfolio();
+  const deployedCash = portfolio.positions.reduce((s, p) => s + p.allocation, 0);
+  const accountValue = portfolio.cash + deployedCash;
+  const availableCash = portfolio.cash;
+
+  const entryPrice = parseFloat((price * 1.005).toFixed(2));
+  const stopDistance = atr ? atr * 1.5 : price * 0.045;
+  const stopPrice = parseFloat((entryPrice - stopDistance).toFixed(2));
+
+  const riskBudget = accountValue * 0.10;
+  const maxAllocation = accountValue * 0.60;
+
+  let shares = atr ? Math.floor(riskBudget / stopDistance) : Math.floor(riskBudget / (price * 0.045));
+  shares = Math.max(1, shares);
+
+  let allocation = parseFloat((shares * entryPrice).toFixed(2));
+
+  // Cap at 60% of account
+  if (allocation > maxAllocation) {
+    shares = Math.floor(maxAllocation / entryPrice);
+    allocation = parseFloat((shares * entryPrice).toFixed(2));
+  }
+
+  // Cap at available cash
+  if (allocation > availableCash) {
+    shares = Math.floor(availableCash / entryPrice);
+    allocation = parseFloat((shares * entryPrice).toFixed(2));
+  }
+
+  // Suppress if can't afford even 1 share
+  if (shares < 1 || allocation < entryPrice) {
+    console.log(`SUPPRESSED: ${symbol} | Insufficient cash ($${availableCash.toFixed(2)}) for entry at $${entryPrice}`);
+    return;
+  }
+
   const timeET = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' });
 
   const sentimentStr = socialSentiment
@@ -635,7 +676,8 @@ async function evaluate(symbol, snap) {
     `Float Rotation: ${rotationStr}${rotationStage ? ' — ' + rotationStage : ''}\n` +
     `Short Vol: ${shortVolStr} | Sentiment: ${sentimentStr}\n` +
     `Confidence: ${finalScore}/100 — ${label}\n` +
-    `Entry: $${entry} | Stop: $${stopPrice}\n` +
+    `Entry: $${entryPrice} | Stop: $${stopPrice}\n` +
+    `Shares: ${shares} | Allocation: $${allocation} | Risk: $${(shares * stopDistance).toFixed(2)}\n` +
     `News: ${newsLine}`
   );
 }
