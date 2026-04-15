@@ -56,7 +56,7 @@ async function sendTelegram(msg) {
 
 function loadPortfolio() {
   try { return JSON.parse(fs.readFileSync(PORTFOLIO_FILE, "utf8")); }
-  catch { return { positions: [] }; }
+  catch { return { cash: 100, positions: [] }; }
 }
 
 function savePortfolio(p) {
@@ -94,6 +94,7 @@ async function processMessage(msg) {
     }
 
     const portfolio = loadPortfolio();
+    if (!portfolio.cash && portfolio.cash !== 0) portfolio.cash = 100;
 
     if (action === "BUY") {
       if (portfolio.positions.length >= 3) {
@@ -108,6 +109,16 @@ async function processMessage(msg) {
       const hardStop   = parseFloat((price * 0.955).toFixed(2));
       const allocation = parseFloat((price * shares).toFixed(2));
 
+      if (allocation > portfolio.cash) {
+        await sendTelegram(
+          "Insufficient cash.\n" +
+          "Required: $" + allocation + "\n" +
+          "Available: $" + portfolio.cash.toFixed(2)
+        );
+        return;
+      }
+
+      portfolio.cash = parseFloat((portfolio.cash - allocation).toFixed(2));
       portfolio.positions.push({
         ticker,
         entry:       price,
@@ -126,7 +137,8 @@ async function processMessage(msg) {
         "Shares: " + shares + " @ $" + price + "\n" +
         "Allocation: $" + allocation + "\n" +
         "Hard stop: $" + hardStop + " (-4.5%)\n" +
-        "Trailing stop: 5% below session high"
+        "Trailing stop: 5% below session high\n" +
+        "Cash remaining: $" + portfolio.cash.toFixed(2)
       );
 
     } else if (action === "SELL") {
@@ -136,10 +148,12 @@ async function processMessage(msg) {
         return;
       }
 
+      const proceeds = parseFloat((price * pos.shares).toFixed(2));
       const pnlPct = ((price - pos.entry) / pos.entry * 100).toFixed(2);
       const pnlUsd = ((price - pos.entry) * pos.shares).toFixed(2);
 
       portfolio.positions = portfolio.positions.filter(p => p.ticker !== ticker);
+      portfolio.cash = parseFloat((portfolio.cash + proceeds).toFixed(2));
       savePortfolio(portfolio);
 
       await sendTelegram(
@@ -147,7 +161,8 @@ async function processMessage(msg) {
         "Ticker: " + ticker + "\n" +
         "Entry: $" + pos.entry + " -> Exit: $" + price + "\n" +
         "Shares: " + pos.shares + "\n" +
-        "P&L: " + pnlPct + "% ($" + pnlUsd + ")"
+        "P&L: " + pnlPct + "% ($" + pnlUsd + ")\n" +
+        "Cash: $" + portfolio.cash.toFixed(2)
       );
     }
 
@@ -159,15 +174,38 @@ async function processMessage(msg) {
 
   } else if (text === "PORTFOLIO" || text === "/PORTFOLIO") {
     const portfolio = loadPortfolio();
+    if (!portfolio.cash && portfolio.cash !== 0) portfolio.cash = 100;
+    const totalAlloc = portfolio.positions.reduce((s, p) => s + p.allocation, 0);
+    const accountValue = parseFloat((portfolio.cash + totalAlloc).toFixed(2));
     if (portfolio.positions.length === 0) {
-      await sendTelegram("No open positions.");
+      await sendTelegram(
+        "No open positions.\n" +
+        "Cash: $" + portfolio.cash.toFixed(2)
+      );
       return;
     }
     const lines = portfolio.positions.map(p =>
       p.ticker + " | " + p.shares + " shares @ $" + p.entry +
       " | Stop: $" + p.hardStop + " | Alloc: $" + p.allocation
     );
-    await sendTelegram("Portfolio:\n" + lines.join("\n"));
+    await sendTelegram(
+      "Portfolio\n" +
+      lines.join("\n") + "\n" +
+      "Cash: $" + portfolio.cash.toFixed(2) + "\n" +
+      "Deployed: $" + totalAlloc.toFixed(2) + "\n" +
+      "Account: ~$" + accountValue
+    );
+
+  } else if (parts[0] === "CASH" && parts.length === 2) {
+    const amount = parseFloat(parts[1]);
+    if (isNaN(amount) || amount < 0) {
+      await sendTelegram("Invalid amount. Use: CASH 500.00");
+      return;
+    }
+    const portfolio = loadPortfolio();
+    portfolio.cash = parseFloat(amount.toFixed(2));
+    savePortfolio(portfolio);
+    await sendTelegram("Cash balance updated: $" + portfolio.cash.toFixed(2));
 
   // ── UNKNOWN ─────────────────────────────────────────────────────────────────
   } else {
