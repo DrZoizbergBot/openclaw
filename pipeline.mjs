@@ -1,5 +1,5 @@
 import { UNIVERSE } from './universe.mjs';
-import { getNews, getFloat } from './finnhub_client.mjs';
+import { getNews, getFloat, getSocialSentiment } from './finnhub_client.mjs';
 import { readFileSync, existsSync } from 'fs';
 
 const TOKEN = process.env.TOKEN;
@@ -31,7 +31,7 @@ let gapSymbols = new Set();
 function computeConfidenceScore({
   proximityPct, changePct, rvol, rvolAccelerating,
   aboveVWAP, obvDivergence, intradaySqueeze, dailySqueeze,
-  hasNews, rotationStage, isGapStock
+  hasNews, rotationStage, isGapStock, socialSentiment
 }) {
   let proximityScore = 0;
   if (proximityPct >= 0) proximityScore = 100;
@@ -60,6 +60,11 @@ function computeConfidenceScore({
     rotationStage === 'building' ? 75 :
     rotationStage === 'early' ? 50 : 0;
 
+  // Social sentiment: combinedScore is -1 to +1, normalize to 0–100
+  const sentimentScore = socialSentiment
+    ? Math.round(((socialSentiment.combinedScore + 1) / 2) * 100)
+    : 0;
+
   return Math.round((
     proximityScore * 0.20 +
     changeScore * 0.15 +
@@ -70,7 +75,8 @@ function computeConfidenceScore({
     (intradaySqueeze ? 100 : dailySqueeze ? 70 : 0) * 0.07 +
     (hasNews ? 100 : 0) * 0.07 +
     rotationScore * 0.05 +
-    (isGapStock ? 100 : 0) * 0.03
+    sentimentScore * 0.05 +
+    (isGapStock ? 100 : 0) * 0.03 // 103% total — gap stock is a bonus on top
   ) * 10) / 10;
 }
 
@@ -548,11 +554,15 @@ async function evaluate(symbol, snap) {
     if (news.length > 0) { newsLine = news[0].headline; hasNews = true; }
   } catch {}
 
+  let socialSentiment = null;
+  try { socialSentiment = await getSocialSentiment(symbol); } catch {}
+
   // Base confidence score
   let score = computeConfidenceScore({
     proximityPct, changePct, rvol, rvolAccelerating,
     aboveVWAP: aboveVWAP !== false, obvDivergence,
-    intradaySqueeze, dailySqueeze, hasNews, rotationStage, isGapStock
+    intradaySqueeze, dailySqueeze, hasNews, rotationStage, isGapStock,
+    socialSentiment
   });
 
   // Apply penalties
@@ -600,6 +610,10 @@ async function evaluate(symbol, snap) {
   const stopPrice = atr ? (price - atr * 1.5).toFixed(2) : (price * 0.955).toFixed(2);
   const timeET = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' });
 
+  const sentimentStr = socialSentiment
+    ? `Score: ${socialSentiment.combinedScore > 0 ? '+' : ''}${socialSentiment.combinedScore} | Mentions: ${socialSentiment.totalMentions}`
+    : 'n/a';
+
   await sendTelegram(
     `🚀 *BREAKOUT ALERT*\n` +
     (tagLine ? `${tagLine}\n` : '') +
@@ -608,6 +622,7 @@ async function evaluate(symbol, snap) {
     `Change: +${changePct.toFixed(2)}% | Proximity: ${proximityPct.toFixed(2)}%\n` +
     `RVOL: ${rvolStr} | VWAP: ${vwapStr} | ATR: ${atrStr}\n` +
     `Float Rotation: ${rotationStr}${rotationStage ? ' — ' + rotationStage : ''}\n` +
+    `Sentiment: ${sentimentStr}\n` +
     `Confidence: ${finalScore}/100 — ${label}\n` +
     `Entry: $${entry} | Stop: $${stopPrice}\n` +
     `News: ${newsLine}`
