@@ -45,7 +45,7 @@ const MIN_RVOL = 1.5;
 const MIN_PROXIMITY = -3.0;
 const MIN_CHANGE = 3.0;
 const MIN_PRICE = 5.0;
-const MIN_CONFIDENCE = 60;
+const MIN_CONFIDENCE = 75;
 const POLL_INTERVAL_MS = 60 * 1000;
 const ATR_PERIOD = 14;
 const RVOL_WINDOW = 5;
@@ -357,16 +357,7 @@ function checkORBEntry(symbol, price, high, low, vol, vwap) {
     const target = (orb.high + orb.range).toFixed(2);
     const stop = orb.low.toFixed(2);
     const entry = (price * 1.005).toFixed(2);
-    const timeET = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' });
-    console.log(`ORB ENTRY: ${symbol} | Price: ${price} | Stop: ${stop} | Target: ${target}`);
-    sendTelegram(
-      `📊 *OPENING RANGE BREAKOUT*\n` +
-      `Ticker: *${symbol}*\n` +
-      `Price: $${price.toFixed(2)} as of ${timeET} ET\n` +
-      `Entry: $${entry} | Stop: $${stop} | Target: $${target}\n` +
-      `ORB High: $${orb.high.toFixed(2)} | ORB Low: $${orb.low.toFixed(2)}\n` +
-      `RVOL: ${rvol ? rvol.toFixed(2) + 'x' : 'n/a'} | VWAP: ${vwap ? '$' + vwap.toFixed(2) : 'n/a'}`
-    );
+    console.log(`ORB ENTRY (suppressed): ${symbol} | Price: ${price} | Stop: ${stop} | Target: ${target}`);
   }
 }
 
@@ -399,10 +390,7 @@ function checkEntryPatterns(symbol, price, high, low, vol) {
       if (prevClose < ema9 && currClose > ema9 && currVol > pw.pullbackVol * 1.2) {
         pw.boneZoneTaken = true;
         const stop = Math.min(pw.pullbackLow, ema20).toFixed(2);
-        const entry = (price * 1.005).toFixed(2);
-        const timeET = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' });
-        console.log(`BONE ZONE ENTRY: ${symbol} | Price: ${price} | Stop: ${stop}`);
-        sendTelegram(`🎯 *PULLBACK ENTRY — Bone Zone*\nTicker: *${symbol}*\nPrice: $${price.toFixed(2)} as of ${timeET} ET\nEntry: $${entry} | Stop: $${stop}\n9 EMA: $${ema9.toFixed(2)} | 20 EMA: $${ema20.toFixed(2)}\nSignal: Reclaimed 9 EMA with expanding volume`);
+        console.log(`BONE ZONE ENTRY (suppressed): ${symbol} | Price: ${price} | Stop: ${stop}`);
       }
     }
   }
@@ -421,11 +409,7 @@ function checkEntryPatterns(symbol, price, high, low, vol) {
       if (prevClose <= vwap && currClose > vwap && currVol > (pw.vwapPullbackVol || volumes[volumes.length-2]) * 1.5) {
         pw.vwapReclaimTaken = true;
         const stop = atr ? (vwap - atr).toFixed(2) : (vwap * 0.99).toFixed(2);
-        const entry = (price * 1.005).toFixed(2);
-        const timeET = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' });
-        const rsiTag = (pw.vwapPullbackRSI !== null && pw.vwapPullbackRSI < 10 && rsi > 10) ? ' | RSI(2) confirmed' : '';
-        console.log(`VWAP RECLAIM ENTRY: ${symbol} | Price: ${price}`);
-        sendTelegram(`🎯 *VWAP RECLAIM ENTRY*${rsiTag}\nTicker: *${symbol}*\nPrice: $${price.toFixed(2)} as of ${timeET} ET\nEntry: $${entry} | Stop: $${stop}\nVWAP: $${vwap.toFixed(2)} | ATR: ${atr ? '$'+atr.toFixed(2) : 'n/a'}\nSignal: Reclaimed VWAP with volume surge`);
+        console.log(`VWAP RECLAIM ENTRY (suppressed): ${symbol} | Price: ${price}`);
       }
       if (currClose < vwap * 0.98) { pw.atVWAP = false; pw.vwapPullbackVol = null; }
     }
