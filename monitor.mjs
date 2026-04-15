@@ -129,7 +129,44 @@ for (const pos of portfolio.positions) {
 
   console.log(`[INFO] ${pos.ticker} | Price: $${price} | High: $${pos.sessionHigh} | Stop: $${effectiveStop} | P&L: ${pnl}% ($${pnlUsd})`);
 
-  // ─── Force exit at 3:30 PM ET ───────────────────────────────────────────
+  // ─── R-multiple scale-out alerts ────────────────────────────────────────
+  const R = pos.entry - pos.hardStop;
+  if (R > 0) {
+    if (!pos.rLevelsAlerted) pos.rLevelsAlerted = [];
+
+    const r1Target = parseFloat((pos.entry + R * 1).toFixed(2));
+    const r2Target = parseFloat((pos.entry + R * 2).toFixed(2));
+    const r3Target = parseFloat((pos.entry + R * 3).toFixed(2));
+
+    if (price >= r3Target && !pos.rLevelsAlerted.includes(3)) {
+      pos.rLevelsAlerted.push(3);
+      await sendTelegram(
+`🎯 3R TARGET HIT — ${pos.ticker}
+Price: $${price} | Entry: $${pos.entry}
+P&L: ${pnl}% ($${pnlUsd})
+→ Sell remaining ${pos.shares} shares. Full exit.`
+      );
+    } else if (price >= r2Target && !pos.rLevelsAlerted.includes(2)) {
+      pos.rLevelsAlerted.push(2);
+      const halfShares = Math.floor(pos.shares / 2);
+      await sendTelegram(
+`🎯 2R TARGET HIT — ${pos.ticker}
+Price: $${price} | Entry: $${pos.entry}
+P&L: ${pnl}% ($${pnlUsd})
+→ Sell ${halfShares} shares (half). Move stop to $${r1Target} (1R).`
+      );
+    } else if (price >= r1Target && !pos.rLevelsAlerted.includes(1)) {
+      pos.rLevelsAlerted.push(1);
+      await sendTelegram(
+`🎯 1R TARGET HIT — ${pos.ticker}
+Price: $${price} | Entry: $${pos.entry}
+P&L: ${pnl}% ($${pnlUsd})
+→ Move stop to breakeven ($${pos.entry}). Hold.`
+      );
+    }
+  }
+
+
   if (isForceExitTime()) {
     await sendTelegram(
 `🔔 CLOSE ${pos.ticker} — 3:30 PM ET
