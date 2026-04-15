@@ -1,12 +1,39 @@
 import { UNIVERSE } from './universe.mjs';
 import { getNews, getFloat, getSocialSentiment } from './finnhub_client.mjs';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync } from 'fs';
 
 const PORTFOLIO_FILE = '/home/davide/openclaw-scripts/portfolio.json';
 
 function readPortfolio() {
   try { return JSON.parse(readFileSync(PORTFOLIO_FILE, 'utf8')); }
-  catch { return { cash: 100, positions: [] }; }
+  catch { return { cash: 100, positions: [], dailyPnl: 0, consecutiveLosses: 0 }; }
+}
+
+function checkCircuitBreakers(portfolio) {
+  const deployedCash = portfolio.positions.reduce((s, p) => s + p.allocation, 0);
+  const accountValue = portfolio.cash + deployedCash;
+
+  // Breaker 1: daily loss limit >= 5% of account
+  const dailyPnl = portfolio.dailyPnl || 0;
+  if (dailyPnl <= -(accountValue * 0.05)) {
+    return `daily loss limit hit ($${Math.abs(dailyPnl).toFixed(2)} lost today)`;
+  }
+
+  // Breaker 2: open risk >= 20% of account
+  const openRisk = portfolio.positions.reduce((s, p) => {
+    const R = (p.entry - p.hardStop) * p.shares;
+    return s + (R > 0 ? R : 0);
+  }, 0);
+  if (openRisk >= accountValue * 0.20) {
+    return `max open risk reached ($${openRisk.toFixed(2)} at risk)`;
+  }
+
+  // Breaker 3: 3 consecutive losses
+  if ((portfolio.consecutiveLosses || 0) >= 3) {
+    return `3 consecutive losses — trading halted`;
+  }
+
+  return null;
 }
 
 const TOKEN = process.env.TOKEN;
@@ -197,6 +224,14 @@ function resetDailyState() {
   Object.keys(pullbackWatch).forEach(k => delete pullbackWatch[k]);
   Object.keys(orbState).forEach(k => delete orbState[k]);
   gapSymbols.clear();
+
+  // Reset daily PnL in portfolio
+  try {
+    const p = readPortfolio();
+    p.dailyPnl = 0;
+    writeFileSync(PORTFOLIO_FILE, JSON.stringify(p, null, 2));
+  } catch {}
+
   console.log('Daily state reset.');
 }
 
@@ -625,6 +660,13 @@ async function evaluate(symbol, snap) {
 
   // ATR-based position sizing
   const portfolio = readPortfolio();
+
+  const breaker = checkCircuitBreakers(portfolio);
+  if (breaker) {
+    console.log(`CIRCUIT BREAKER: ${symbol} suppressed — ${breaker}`);
+    return;
+  }
+
   const deployedCash = portfolio.positions.reduce((s, p) => s + p.allocation, 0);
   const accountValue = portfolio.cash + deployedCash;
   const availableCash = portfolio.cash;

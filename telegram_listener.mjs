@@ -154,6 +154,18 @@ async function processMessage(msg) {
 
       portfolio.positions = portfolio.positions.filter(p => p.ticker !== ticker);
       portfolio.cash = parseFloat((portfolio.cash + proceeds).toFixed(2));
+
+      // Track daily PnL and consecutive losses
+      const tradePnl = parseFloat(pnlUsd);
+      if (!portfolio.dailyPnl) portfolio.dailyPnl = 0;
+      portfolio.dailyPnl = parseFloat((portfolio.dailyPnl + tradePnl).toFixed(2));
+      if (!portfolio.consecutiveLosses) portfolio.consecutiveLosses = 0;
+      if (tradePnl < 0) {
+        portfolio.consecutiveLosses += 1;
+      } else {
+        portfolio.consecutiveLosses = 0;
+      }
+
       savePortfolio(portfolio);
 
       await sendTelegram(
