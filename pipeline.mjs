@@ -54,6 +54,7 @@ const SQUEEZE_PERIOD = 20;
 const ORB_MINUTES = 15;
 
 const alertedToday = new Set();
+const suppressedToday = new Set();
 const orbAlertedToday = new Set();
 const pullbackWatch = {};
 const orbState = {};
@@ -220,6 +221,7 @@ function resetDailyState() {
     state[symbol] = { atr, dailySqueeze, rvolHistory: [], intradayBars: [], sessionHigh: null, vwap: null, obvDivergence: false, intradaySqueeze: false };
   }
   alertedToday.clear();
+  suppressedToday.clear();
   orbAlertedToday.clear();
   Object.keys(pullbackWatch).forEach(k => delete pullbackWatch[k]);
   Object.keys(orbState).forEach(k => delete orbState[k]);
@@ -559,6 +561,7 @@ async function evaluate(symbol, snap) {
   checkEntryPatterns(symbol, price, high, low, vol);
 
   if (alertedToday.has(symbol)) return;
+  if (suppressedToday.has(symbol)) return;
 
   const prevClose = snap.prevDailyBar?.c;
   if (!prevClose) return;
@@ -612,7 +615,10 @@ async function evaluate(symbol, snap) {
   const label = confidenceLabel(finalScore);
 
   if (finalScore < MIN_CONFIDENCE) {
-    console.log(`SUPPRESSED: ${symbol} | Score: ${score} → ${finalScore} | Penalties: ${reasons.join(', ')}`);
+    if (!suppressedToday.has(symbol)) {
+      console.log(`SUPPRESSED: ${symbol} | Score: ${score} → ${finalScore} | Penalties: ${reasons.join(', ')}`);
+      suppressedToday.add(symbol);
+    }
     return;
   }
 
@@ -709,7 +715,6 @@ async function evaluate(symbol, snap) {
 }
 
 async function poll() {
-  loadGapWatchlist();
   if (!isMarketHours()) {
     console.log(`Outside market hours — skipping poll at ${new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' })} ET`);
     return;
