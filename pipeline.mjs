@@ -286,6 +286,7 @@ function setOpeningRange(symbol, bars) {
 
 function checkORBEntry(symbol, price, high, low, vol, vwap) {
   if (orbAlertedToday.has(symbol)) return;
+  if (getETMinutes() > 720) return; // no ORB alerts after 12:00 PM ET
   const orb = orbState[symbol];
   if (!orb?.set) return;
   const avgVol = avgVolumes[symbol];
