@@ -507,11 +507,21 @@ async function fetchSnapshots(symbols) {
   const snapshots = {};
   for (let i = 0; i < symbols.length; i += batchSize) {
     const batch = symbols.slice(i, i + batchSize);
-    const res = await fetch(
-      `https://data.alpaca.markets/v2/stocks/snapshots?symbols=${batch.join(',')}&feed=iex`,
-      { headers: { 'APCA-API-KEY-ID': KEY, 'APCA-API-SECRET-KEY': SECRET } }
-    );
-    Object.assign(snapshots, await res.json());
+    try {
+      const res = await fetch(
+        `https://data.alpaca.markets/v2/stocks/snapshots?symbols=${batch.join(',')}&feed=iex`,
+        { headers: { 'APCA-API-KEY-ID': KEY, 'APCA-API-SECRET-KEY': SECRET } }
+      );
+      const text = await res.text();
+      if (!text.startsWith('{')) {
+        console.error(`Batch ${i/batchSize + 1} returned non-JSON — skipping`);
+        continue;
+      }
+      Object.assign(snapshots, JSON.parse(text));
+    } catch (e) {
+      console.error(`Batch ${i/batchSize + 1} error: ${e.message} — skipping`);
+    }
+    await new Promise(r => setTimeout(r, 100));
   }
   return snapshots;
 }
