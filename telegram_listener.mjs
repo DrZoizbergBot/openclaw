@@ -180,9 +180,7 @@ async function processMessage(msg) {
 
   // ── PORTFOLIO ───────────────────────────────────────────────────────────────
   } else if (text === 'SCAN' || text === '/SCAN') {
-    await sendTelegram('Scan started...');
-    const { execFile } = await import('child_process');
-    execFile('bash', ['/home/davide/openclaw-scripts/run_research.sh'], { env: { ...process.env, TOKEN, CHAT } }, () => {});
+    await sendTelegram('SCAN command disabled. Pipeline runs automatically every 60 seconds during market hours.');
 
   } else if (text === "PORTFOLIO" || text === "/PORTFOLIO") {
     const portfolio = loadPortfolio();
