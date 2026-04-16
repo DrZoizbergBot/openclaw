@@ -708,6 +708,13 @@ async function evaluate(symbol, snap) {
     : 'n/a';
   const shortVolStr = svr !== null ? `${(svr * 100).toFixed(0)}%` : 'n/a';
 
+  const rationale = await generateRationale({
+    symbol, price, changePct, rvol, rvolAccelerating,
+    aboveVWAP: aboveVWAP !== false, proximityPct, rotationStage,
+    obvDivergence, intradaySqueeze, atrExtension,
+    shortVolRatio: svr, socialSentiment, finalScore, newsLine, tags
+  });
+
   await sendTelegram(
     `🚀 *BREAKOUT ALERT*\n` +
     (tagLine ? `${tagLine}\n` : '') +
@@ -720,8 +727,54 @@ async function evaluate(symbol, snap) {
     `Confidence: ${finalScore}/100 — ${label}\n` +
     `Entry: $${entryPrice} | Stop: $${stopPrice}\n` +
     `Shares: ${shares} | Allocation: $${allocation} | Risk: $${(shares * stopDistance).toFixed(2)}\n` +
-    `News: ${newsLine}`
+    `News: ${newsLine}\n` +
+    (rationale ? `\n💡 ${rationale}` : '')
   );
+}
+
+async function generateRationale({
+  symbol, price, changePct, rvol, rvolAccelerating, aboveVWAP,
+  proximityPct, rotationStage, obvDivergence, intradaySqueeze,
+  atrExtension, shortVolRatio, socialSentiment, finalScore, newsLine, tags
+}) {
+  try {
+    const prompt = `You are a momentum trading assistant. Analyze this stock alert and write 2 sentences max explaining in plain English why a trader should or should not buy. Be direct, no fluff, no disclaimers.
+
+Stock: ${symbol}
+Price change today: +${changePct.toFixed(1)}%
+Relative volume: ${rvol ? rvol.toFixed(1) + 'x' + (rvolAccelerating ? ' and accelerating' : '') : 'unknown'}
+Above VWAP: ${aboveVWAP ? 'yes' : 'no'}
+Proximity to session high: ${proximityPct.toFixed(1)}%
+Float rotation: ${rotationStage || 'unknown'}
+OBV divergence: ${obvDivergence ? 'yes' : 'no'}
+Squeeze active: ${intradaySqueeze ? 'yes' : 'no'}
+ATR extension: ${atrExtension ? atrExtension.toFixed(1) + 'x' : 'unknown'}
+Short volume ratio: ${shortVolRatio !== null ? (shortVolRatio * 100).toFixed(0) + '%' : 'unknown'}
+Social sentiment: ${socialSentiment ? socialSentiment.combinedScore : 'unknown'}
+Confidence score: ${finalScore}/100
+Signal tags: ${tags.join(', ') || 'none'}
+News: ${newsLine}
+
+Write the rationale now:`;
+
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        max_tokens: 150,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    const data = await res.json();
+    return data?.choices?.[0]?.message?.content?.trim() || null;
+  } catch (e) {
+    console.error(`Rationale generation failed: ${e.message}`);
+    return null;
+  }
 }
 
 async function poll() {
