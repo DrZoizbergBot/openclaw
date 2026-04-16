@@ -3,12 +3,24 @@ module.exports = {
     {
       name: 'edgar_monitor',
       script: '/home/davide/openclaw-scripts/edgar_monitor.mjs',
-      env_file: '/home/davide/openclaw_telegram.env',
+      env: {
+        TOKEN: '8630398582:AAFkCX0gNGs3T3cl9LAzxWzQf5OrePe56Og',
+        CHAT: '672803762',
+        ALPACA_KEY: 'PKVILZNOV7COGTZSWQGLFF7FFM',
+        ALPACA_SECRET: 'AXbHqxvVa9dAncdXgSP4oxk7neQfGttyhFfCSFewvCTL',
+        FINNHUB_KEY: 'd773mp1r01qtg3nfh4q0d773mp1r01qtg3nfh4qg',
+      }
     },
     {
       name: 'pipeline',
       script: '/home/davide/openclaw-scripts/pipeline.mjs',
-      env_file: '/home/davide/openclaw_telegram.env',
+      env: {
+        TOKEN: '8630398582:AAFkCX0gNGs3T3cl9LAzxWzQf5OrePe56Og',
+        CHAT: '672803762',
+        ALPACA_KEY: 'PKVILZNOV7COGTZSWQGLFF7FFM',
+        ALPACA_SECRET: 'AXbHqxvVa9dAncdXgSP4oxk7neQfGttyhFfCSFewvCTL',
+        FINNHUB_KEY: 'd773mp1r01qtg3nfh4q0d773mp1r01qtg3nfh4qg',
+      }
     }
   ]
 };
