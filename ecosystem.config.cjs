@@ -1,3 +1,5 @@
+const OPENAI_KEY = 'OPENAI_KEY_HERE';
+
 module.exports = {
   apps: [
     {
@@ -9,7 +11,11 @@ module.exports = {
         ALPACA_KEY: 'PKVILZNOV7COGTZSWQGLFF7FFM',
         ALPACA_SECRET: 'AXbHqxvVa9dAncdXgSP4oxk7neQfGttyhFfCSFewvCTL',
         FINNHUB_KEY: 'd773mp1r01qtg3nfh4q0d773mp1r01qtg3nfh4qg',
-        OPENAI_API_KEY: 'OPENAI_KEY_HERE',
+        OPENAI_API_KEY: OPENAI_KEY,
+      }
+    },
+    {
+      name: 'edgar_monitor',
       script: '/home/davide/openclaw-scripts/edgar_monitor.mjs',
       env: {
         TOKEN: '8630398582:AAFkCX0gNGs3T3cl9LAzxWzQf5OrePe56Og',
@@ -17,7 +23,7 @@ module.exports = {
         ALPACA_KEY: 'PKVILZNOV7COGTZSWQGLFF7FFM',
         ALPACA_SECRET: 'AXbHqxvVa9dAncdXgSP4oxk7neQfGttyhFfCSFewvCTL',
         FINNHUB_KEY: 'd773mp1r01qtg3nfh4q0d773mp1r01qtg3nfh4qg',
-        OPENAI_API_KEY: 'OPENAI_KEY_HERE',
+        OPENAI_API_KEY: OPENAI_KEY,
       }
     },
     {
@@ -29,7 +35,7 @@ module.exports = {
         ALPACA_KEY: 'PKVILZNOV7COGTZSWQGLFF7FFM',
         ALPACA_SECRET: 'AXbHqxvVa9dAncdXgSP4oxk7neQfGttyhFfCSFewvCTL',
         FINNHUB_KEY: 'd773mp1r01qtg3nfh4q0d773mp1r01qtg3nfh4qg',
-        OPENAI_API_KEY: 'OPENAI_KEY_HERE',
+        OPENAI_API_KEY: OPENAI_KEY,
       }
     }
   ]
