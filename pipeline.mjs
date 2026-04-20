@@ -709,10 +709,10 @@ async function evaluate(symbol, snap) {
   const shortVolStr = svr !== null ? `${(svr * 100).toFixed(0)}%` : 'n/a';
 
   const rationale = await generateRationale({
-    symbol, price, changePct, rvol, rvolAccelerating,
+    symbol, changePct, rvol, rvolAccelerating,
     aboveVWAP: aboveVWAP !== false, proximityPct, rotationStage,
     obvDivergence, intradaySqueeze, atrExtension,
-    shortVolRatio: svr, socialSentiment, finalScore, newsLine, tags
+    shortVolRatio: svr, socialSentiment, hasNews, newsLine, tags
   });
 
   await sendTelegram(
@@ -728,34 +728,50 @@ async function evaluate(symbol, snap) {
     `Entry: $${entryPrice} | Stop: $${stopPrice}\n` +
     `Shares: ${shares} | Allocation: $${allocation} | Risk: $${(shares * stopDistance).toFixed(2)}\n` +
     `News: ${newsLine}\n` +
-    (rationale ? `\n💡 ${rationale}` : '')
+    (rationale ? `\n💡 *WHY BUY*\n${rationale}` : '')
   );
 }
 
 async function generateRationale({
-  symbol, price, changePct, rvol, rvolAccelerating, aboveVWAP,
+  symbol, changePct, rvol, rvolAccelerating, aboveVWAP,
   proximityPct, rotationStage, obvDivergence, intradaySqueeze,
-  atrExtension, shortVolRatio, socialSentiment, finalScore, newsLine, tags
+  atrExtension, shortVolRatio, socialSentiment, hasNews, newsLine, tags
 }) {
   try {
-    const prompt = `You are a momentum trading assistant. Analyze this stock alert and write 2 sentences max explaining in plain English why a trader should or should not buy. Be direct, no fluff, no disclaimers.
+    const signalContext = [
+      `Price change: +${changePct.toFixed(1)}% today`,
+      rvol ? `Relative volume: ${rvol.toFixed(1)}x normal${rvolAccelerating ? ', accelerating' : ''}` : null,
+      aboveVWAP ? `Above VWAP: yes` : `Above VWAP: no`,
+      `Proximity to session high: ${proximityPct.toFixed(1)}%`,
+      rotationStage ? `Float rotation stage: ${rotationStage}` : null,
+      obvDivergence ? `OBV divergence: yes (volume rising while price was flat)` : null,
+      intradaySqueeze ? `Intraday squeeze: yes (volatility compressed, breakout just fired)` : null,
+      atrExtension ? `ATR extension: ${atrExtension.toFixed(1)}x (how far price has moved vs normal daily range)` : null,
+      shortVolRatio !== null ? `Short volume ratio: ${(shortVolRatio * 100).toFixed(0)}%` : null,
+      socialSentiment ? `Social sentiment score: ${socialSentiment.combinedScore} (mentions: ${socialSentiment.totalMentions})` : null,
+      tags.length ? `Active signal tags: ${tags.join(', ')}` : null,
+    ].filter(Boolean).join('\n');
 
-Stock: ${symbol}
-Price change today: +${changePct.toFixed(1)}%
-Relative volume: ${rvol ? rvol.toFixed(1) + 'x' + (rvolAccelerating ? ' and accelerating' : '') : 'unknown'}
-Above VWAP: ${aboveVWAP ? 'yes' : 'no'}
-Proximity to session high: ${proximityPct.toFixed(1)}%
-Float rotation: ${rotationStage || 'unknown'}
-OBV divergence: ${obvDivergence ? 'yes' : 'no'}
-Squeeze active: ${intradaySqueeze ? 'yes' : 'no'}
-ATR extension: ${atrExtension ? atrExtension.toFixed(1) + 'x' : 'unknown'}
-Short volume ratio: ${shortVolRatio !== null ? (shortVolRatio * 100).toFixed(0) + '%' : 'unknown'}
-Social sentiment: ${socialSentiment ? socialSentiment.combinedScore : 'unknown'}
-Confidence score: ${finalScore}/100
-Signal tags: ${tags.join(', ') || 'none'}
-News: ${newsLine}
+    const newsSection = hasNews
+      ? `News headline: "${newsLine}"`
+      : null;
 
-Write the rationale now:`;
+    const prompt = `You are a concise momentum trading analyst. A stock alert just fired for ${symbol}. Write a structured analysis in this exact format:
+
+${newsSection ? `📰 News: [In 1-2 sentences, explain what this specific news means for the stock and why it matters to today's price move. Be specific about the news content, not generic.]
+
+` : ''}📊 Signals:
+[For each relevant signal below, write one bullet point explaining what it means for THIS trade in plain English. Skip signals that are neutral or missing. Focus on what each signal tells us about buyer/seller behavior right now.]
+
+Signal data:
+${signalContext}
+
+Rules:
+- Never use words like "compelling", "robust", "significant", "strong momentum" or other vague hype
+- Each bullet must explain the signal in plain English as if talking to a beginner trader
+- Maximum 6 bullets
+- No disclaimers, no "please consult", no generic advice
+- Start directly with ${newsSection ? '📰 News:' : '📊 Signals:'}`;
 
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -765,7 +781,7 @@ Write the rationale now:`;
       },
       body: JSON.stringify({
         model: 'gpt-4o-mini',
-        max_tokens: 150,
+        max_tokens: 400,
         messages: [{ role: 'user', content: prompt }],
       }),
     });
