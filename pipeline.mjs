@@ -421,10 +421,13 @@ function checkEntryPatterns(symbol, price, high, low, vol) {
 async function fetchIntradayBars(symbol) {
   try {
     const today = new Date().toISOString().split('T')[0];
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
     const res = await fetch(
       `https://data.alpaca.markets/v2/stocks/${symbol}/bars?timeframe=1Min&start=${today}T13:30:00Z&feed=iex&limit=390`,
-      { headers: { 'APCA-API-KEY-ID': KEY, 'APCA-API-SECRET-KEY': SECRET } }
+      { headers: { 'APCA-API-KEY-ID': KEY, 'APCA-API-SECRET-KEY': SECRET }, signal: controller.signal }
     );
+    clearTimeout(timeout);
     return (await res.json()).bars || [];
   } catch { return []; }
 }
@@ -433,10 +436,13 @@ async function fetchDailyBars(symbol) {
   try {
     const end = new Date().toISOString();
     const start = new Date(Date.now() - 30*24*60*60*1000).toISOString();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
     const res = await fetch(
       `https://data.alpaca.markets/v2/stocks/${symbol}/bars?timeframe=1Day&start=${start}&end=${end}&feed=iex&limit=30`,
-      { headers: { 'APCA-API-KEY-ID': KEY, 'APCA-API-SECRET-KEY': SECRET } }
+      { headers: { 'APCA-API-KEY-ID': KEY, 'APCA-API-SECRET-KEY': SECRET }, signal: controller.signal }
     );
+    clearTimeout(timeout);
     return (await res.json()).bars || [];
   } catch { return []; }
 }
@@ -508,10 +514,16 @@ async function fetchSnapshots(symbols) {
   for (let i = 0; i < symbols.length; i += batchSize) {
     const batch = symbols.slice(i, i + batchSize);
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
       const res = await fetch(
         `https://data.alpaca.markets/v2/stocks/snapshots?symbols=${batch.join(',')}&feed=iex`,
-        { headers: { 'APCA-API-KEY-ID': KEY, 'APCA-API-SECRET-KEY': SECRET } }
+        {
+          headers: { 'APCA-API-KEY-ID': KEY, 'APCA-API-SECRET-KEY': SECRET },
+          signal: controller.signal,
+        }
       );
+      clearTimeout(timeout);
       const text = await res.text();
       if (!text.startsWith('{')) {
         console.error(`Batch ${i/batchSize + 1} returned non-JSON — skipping`);
@@ -521,7 +533,7 @@ async function fetchSnapshots(symbols) {
     } catch (e) {
       console.error(`Batch ${i/batchSize + 1} error: ${e.message} — skipping`);
     }
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 300));
   }
   return snapshots;
 }
