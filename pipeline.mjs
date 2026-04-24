@@ -614,10 +614,17 @@ async function evaluate(symbol, snap) {
   ) return;
 
   let newsLine = 'No recent news';
+  let newsUrl = null;
+  let articleText = null;
   let hasNews = false;
   try {
     const news = await getNews(symbol);
-    if (news.length > 0) { newsLine = news[0].headline; hasNews = true; }
+    if (news.length > 0) {
+      newsLine = news[0].headline;
+      newsUrl = news[0].url;
+      hasNews = true;
+      if (newsUrl) articleText = await fetchArticleText(newsUrl);
+    }
   } catch {}
 
   let socialSentiment = null;
@@ -732,7 +739,7 @@ async function evaluate(symbol, snap) {
     symbol, changePct, rvol, rvolAccelerating,
     aboveVWAP: aboveVWAP !== false, proximityPct, rotationStage,
     obvDivergence, intradaySqueeze, atrExtension,
-    shortVolRatio: svr, socialSentiment, hasNews, newsLine, tags
+    shortVolRatio: svr, socialSentiment, hasNews, newsLine, articleText, tags
   });
 
   await sendTelegram(
@@ -747,15 +754,43 @@ async function evaluate(symbol, snap) {
     `Confidence: ${finalScore}/100 — ${label}\n` +
     `Entry: $${entryPrice} | Stop: $${stopPrice}\n` +
     `Shares: ${shares} | Allocation: $${allocation} | Risk: $${(shares * stopDistance).toFixed(2)}\n` +
-    `News: ${newsLine}\n` +
+    `News: ${articleText ? newsLine + ' (article read)' : newsLine}\n` +
     (rationale ? `\n💡 *WHY BUY*\n${rationale}` : '')
   );
+}
+
+async function fetchArticleText(url) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; OpenClaw/1.0)',
+        'Accept': 'text/html,application/xhtml+xml',
+      }
+    });
+    clearTimeout(timeout);
+    if (!res.ok) return null;
+    const html = await res.text();
+    // Strip HTML tags, scripts, styles
+    const text = html
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    // Return first 3000 chars — enough for a summary
+    return text.length > 200 ? text.slice(0, 3000) : null;
+  } catch {
+    return null;
+  }
 }
 
 async function generateRationale({
   symbol, changePct, rvol, rvolAccelerating, aboveVWAP,
   proximityPct, rotationStage, obvDivergence, intradaySqueeze,
-  atrExtension, shortVolRatio, socialSentiment, hasNews, newsLine, tags
+  atrExtension, shortVolRatio, socialSentiment, hasNews, newsLine, articleText, tags
 }) {
   try {
     const signalContext = [
@@ -779,13 +814,18 @@ async function generateRationale({
     ];
     const isGenericNews = !hasNews || genericHeadlines.some(g => newsLine.toLowerCase().includes(g));
 
-    const newsSection = !isGenericNews
-      ? `News headline: "${newsLine}"`
-      : null;
+    let newsSection = null;
+    if (!isGenericNews) {
+      if (articleText) {
+        newsSection = `Article content (extracted from full article):\n"${articleText}"`;
+      } else {
+        newsSection = `News headline: "${newsLine}"`;
+      }
+    }
 
     const prompt = `You are a concise momentum trading analyst. A stock alert just fired for ${symbol}. Write a structured analysis in this exact format:
 
-${newsSection ? `📰 News: [In 1-2 sentences, explain what this specific news means for the stock and why it matters to today's price move. Be specific about the news content, not generic.]
+${newsSection ? `📰 News: [In 1-2 sentences, explain what this specific news means for the stock and why it matters to today's price move. Base this strictly on the article content provided — do not invent or assume facts not present in the article.]
 
 ` : ''}📊 Signals:
 [For each relevant signal below, write one bullet point explaining what it means for THIS trade in plain English. Skip signals that are neutral or missing. Focus on what each signal tells us about buyer/seller behavior right now.]
@@ -798,6 +838,7 @@ Rules:
 - Each bullet must explain the signal in plain English as if talking to a beginner trader
 - Maximum 6 bullets
 - No disclaimers, no "please consult", no generic advice
+- If article content is provided, summarize only what is actually written — never fabricate details
 - Start directly with ${newsSection ? '📰 News:' : '📊 Signals:'}`;
 
     const res = await fetch('https://api.openai.com/v1/chat/completions', {

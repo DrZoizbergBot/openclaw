@@ -13,6 +13,7 @@ export async function getNews(symbol) {
   const data = await get(`/company-news?symbol=${symbol}&from=${weekAgo}&to=${today}`);
   return (data || []).slice(0, 5).map(n => ({
     headline: n.headline,
+    url: n.url,
     source: n.source,
     datetime: new Date(n.datetime * 1000).toISOString(),
   }));
