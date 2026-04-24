@@ -41,9 +41,9 @@ const CHAT = process.env.CHAT;
 const KEY = process.env.ALPACA_KEY;
 const SECRET = process.env.ALPACA_SECRET;
 
-const MIN_RVOL = 1.5;
+const MIN_RVOL = 1.2;
 const MIN_PROXIMITY = -3.0;
-const MIN_CHANGE = 3.0;
+const MIN_CHANGE = 2.0;
 const MIN_PRICE = 5.0;
 const MIN_CONFIDENCE = 75;
 const POLL_INTERVAL_MS = 60 * 1000;
