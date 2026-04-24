@@ -772,7 +772,14 @@ async function generateRationale({
       tags.length ? `Active signal tags: ${tags.join(', ')}` : null,
     ].filter(Boolean).join('\n');
 
-    const newsSection = hasNews
+    const genericHeadlines = [
+      'pre-market', 'premarket', 'top movers', 'most active', 'market movers',
+      'stocks on the move', 'gapping', 'gap up', 'gap down', 's&p500 movers',
+      'nasdaq movers', 'market open', 'morning movers', 'after hours movers'
+    ];
+    const isGenericNews = !hasNews || genericHeadlines.some(g => newsLine.toLowerCase().includes(g));
+
+    const newsSection = !isGenericNews
       ? `News headline: "${newsLine}"`
       : null;
 
