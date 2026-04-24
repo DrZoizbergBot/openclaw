@@ -561,7 +561,15 @@ async function evaluate(symbol, snap) {
   setOpeningRange(symbol, state[symbol].intradayBars);
 
   const avgVol = avgVolumes[symbol];
-  const rvol = avgVol ? vol / avgVol : null;
+
+  // Normalize volume by time elapsed in session to project full-day volume
+  // Market hours: 9:30 AM - 4:00 PM ET = 390 minutes total
+  const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const minutesElapsed = (etNow.getHours() * 60 + etNow.getMinutes()) - (9 * 60 + 30);
+  const sessionProgress = Math.min(Math.max(minutesElapsed / 390, 0.01), 1);
+  const projectedVol = vol / sessionProgress;
+
+  const rvol = avgVol ? projectedVol / avgVol : null;
   if (rvol) {
     state[symbol].rvolHistory.push(rvol);
     if (state[symbol].rvolHistory.length > RVOL_WINDOW) state[symbol].rvolHistory.shift();
