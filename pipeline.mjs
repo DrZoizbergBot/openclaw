@@ -46,7 +46,7 @@ const MIN_PROXIMITY = -3.0;
 const MIN_CHANGE = 2.0;
 const MIN_PRICE = 5.0;
 const MIN_CONFIDENCE = 75;
-const POLL_INTERVAL_MS = 60 * 1000;
+const POLL_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
 const ATR_PERIOD = 14;
 const RVOL_WINDOW = 5;
 const OBV_WINDOW = 5;
@@ -533,7 +533,7 @@ async function fetchSnapshots(symbols) {
     } catch (e) {
       console.error(`Batch ${i/batchSize + 1} error: ${e.message} — skipping`);
     }
-    await new Promise(r => setTimeout(r, 300));
+    await new Promise(r => setTimeout(r, 1000));
   }
   return snapshots;
 }
